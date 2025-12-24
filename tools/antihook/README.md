@@ -2,7 +2,7 @@
 
 ## 简介
 
-AntiHook 是一个用于绕过某些限制的工具，来自 [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook)。
+AntiHook 工具来自 [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook)。
 
 ## 使用方法
 
