@@ -271,9 +271,9 @@ deploy-instructions.txt
 
 # Windows 批处理脚本
 *.bat
-!start-pm2.bat
-!stop-pm2.bat
-!restart-pm2.bat
+
+# Shell 脚本
+*.sh
 
 # PowerShell 脚本
 *.ps1
@@ -286,6 +286,13 @@ DEPLOY-FORMAT-FIX.md
 
 # 用户脚本
 kiro-oauth-auto-clear.user.js
+userscripts/
+
+# 工具脚本
+list-models-*.js
+
+# 中文批处理脚本
+启动服务.bat
 
 # Claude Code 配置
 .claude/
