@@ -6,9 +6,18 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.0.0-blue.svg)](https://www.typescriptlang.org/)
 
+> **基于项目**: 本项目基于 [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook) 进行二次开发和改进
+
 ## 📖 项目简介
 
 Kiro OAuth 2 API 是一个强大的代理服务，将 AWS CodeWhisperer (Kiro) 的 OAuth 认证转换为 Claude API 兼容格式。支持 Claude Code、Cursor 等 AI 编程工具，提供完整的 Provider Pool 管理功能。
+
+本项目在原项目基础上进行了以下改进：
+- 优化了 Provider Pool 管理机制
+- 增强了 Web UI 管理界面
+- 添加了 Redis 缓存支持
+- 改进了错误处理和日志系统
+- 优化了 Token 自动刷新机制
 
 ### ✨ 核心特性
 
@@ -360,6 +369,7 @@ curl http://localhost:8045/stats
 
 ## 🙏 致谢
 
+- [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook) - 本项目的原始基础项目
 - [AWS CodeWhisperer](https://aws.amazon.com/codewhisperer/) - 提供 AI 编程助手服务
 - [Anthropic Claude](https://www.anthropic.com/) - 提供 Claude API 标准
 - [Next.js](https://nextjs.org/) - 前端框架
