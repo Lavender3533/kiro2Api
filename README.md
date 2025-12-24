@@ -263,6 +263,22 @@ ufw allow from 127.0.0.1 to any port 8045
 | `ENABLE_THINKING_BY_DEFAULT` | boolean | `true` | 默认启用 Thinking |
 | `MAX_ERROR_COUNT` | number | `5` | 最大错误次数 |
 
+### Redis 缓存配置（可选）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `REDIS_ENABLED` | boolean | `false` | 是否启用 Redis 缓存 |
+| `REDIS_HOST` | string | `"localhost"` | Redis 服务器地址 |
+| `REDIS_PORT` | number | `6379` | Redis 端口 |
+| `REDIS_PASSWORD` | string | `""` | Redis 密码（可选）|
+| `REDIS_DB` | number | `0` | Redis 数据库编号 |
+
+启用 Redis 可以提升性能，缓存包括：
+- Token 缓存（1小时）
+- Provider 健康状态（5分钟）
+- 会话历史（30分钟）
+- 请求缓存（1分钟）
+
 ## 🐛 故障排除
 
 ### 常见问题

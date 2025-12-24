@@ -15,5 +15,10 @@
   "CRON_REFRESH_TOKEN": true,
   "PROVIDER_POOLS_FILE_PATH": "provider_pools.json",
   "MAX_ERROR_COUNT": 5,
-  "ENABLE_THINKING_BY_DEFAULT": true
+  "ENABLE_THINKING_BY_DEFAULT": true,
+  "REDIS_ENABLED": false,
+  "REDIS_HOST": "localhost",
+  "REDIS_PORT": 6379,
+  "REDIS_PASSWORD": "",
+  "REDIS_DB": 0
 }
