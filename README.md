@@ -8,14 +8,13 @@
 
 ## 📖 项目简介
 
-Kiro OAuth 2 API 是一个强大的代理服务，将 AWS CodeWhisperer (Kiro) 的 OAuth 认证转换为 Claude API 兼容格式。支持 Claude Code、Cursor 等 AI 编程工具，提供完整的 Provider Pool 管理和自动注册功能。
+Kiro OAuth 2 API 是一个强大的代理服务，将 AWS CodeWhisperer (Kiro) 的 OAuth 认证转换为 Claude API 兼容格式。支持 Claude Code、Cursor 等 AI 编程工具，提供完整的 Provider Pool 管理功能。
 
 ### ✨ 核心特性
 
 - 🔐 **Kiro OAuth 认证** - 支持 AWS CodeWhisperer OAuth 2.0 认证
 - 🔄 **Claude API 兼容** - 完全兼容 Claude Messages API (`/v1/messages`)
 - 🎯 **Provider Pool 管理** - 多账号池管理，自动负载均衡和健康检查
-- 🤖 **自动注册功能** - 批量自动注册 AWS Builder ID 账号
 - 💭 **Extended Thinking** - 支持 Claude Extended Thinking 功能
 - 🛠️ **工具调用支持** - 完整支持 Claude Tools API
 - 📊 **Web UI 管理** - 现代化的管理界面
@@ -34,8 +33,8 @@ Kiro OAuth 2 API 是一个强大的代理服务，将 AWS CodeWhisperer (Kiro) �
 1. **克隆仓库**
 
 ```bash
-git clone <your-repo-url>
-cd AIClient-2-API-main
+git clone https://github.com/Lavender3533/kiro2Api.git
+cd kiro2Api
 ```
 
 2. **安装依赖**
@@ -154,44 +153,6 @@ cp your-kiro-token.json configs/kiro/kiro-auth-token.json
 - 手动标记账号健康状态
 - 查看使用统计
 
-### 自动注册功能
-
-批量自动注册 AWS Builder ID 账号：
-
-1. **配置邮箱池**
-
-创建 `yx.txt` 文件，每行一个邮箱和密码：
-
-```
-email1@example.com----password1
-email2@example.com----password2
-```
-
-2. **配置注册工具**
-
-编辑 `kiro-register/config.js`：
-
-```javascript
-export const config = {
-  roxyBrowser: {
-    token: 'your-roxy-token',
-    port: 50000,
-  },
-  emailPoolFile: '../yx.txt',
-  kiro2api: {
-    baseUrl: 'http://localhost:8045',
-  },
-};
-```
-
-3. **运行注册**
-
-```bash
-cd kiro-register
-npm install
-node index.js
-```
-
 ### Extended Thinking
 
 启用 Extended Thinking 功能：
@@ -227,7 +188,6 @@ node index.js
 ├── frontend/                # 前端源码 (Next.js)
 │   ├── app/                 # 页面组件
 │   └── components/          # UI 组件
-├── kiro-register/           # 自动注册工具
 ├── configs/                 # 配置文件目录
 │   └── kiro/               # Kiro Token 存储
 ├── config.json             # 主配置文件
@@ -393,8 +353,8 @@ curl http://localhost:8045/stats
 
 如有问题或建议，请通过以下方式联系：
 
-- 提交 [Issue](../../issues)
-- 发送邮件至：[your-email@example.com]
+- 提交 [Issue](https://github.com/Lavender3533/kiro2Api/issues)
+- 发送邮件至：285567389@qq.com
 
 ---
 
