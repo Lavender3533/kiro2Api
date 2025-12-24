@@ -1,0 +1,47 @@
+{
+  "name": "kiro2api",
+  "version": "1.0.0",
+  "description": "Kiro OAuth to API - Free Claude API Access",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/tokenizer": "^0.0.4",
+    "axios": "^1.10.0",
+    "deepmerge": "^4.3.1",
+    "dotenv": "^16.4.5",
+    "google-auth-library": "^10.1.0",
+    "lodash": "^4.17.21",
+    "multer": "^2.0.2",
+    "open": "^10.2.0",
+    "redis": "^4.7.0",
+    "undici": "^7.12.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.28.0",
+    "@jest/globals": "^29.7.0",
+    "babel-jest": "^30.0.5",
+    "babel-plugin-transform-import-meta": "^2.3.3",
+    "jest": "^29.7.0",
+    "jest-environment-node": "^29.7.0",
+    "supertest": "^6.3.3"
+  },
+  "scripts": {
+    "start": "node --max-old-space-size=120 src/api-server.js",
+    "dev": "node --max-old-space-size=120 src/api-server.js --api-key 123456 --host 0.0.0.0 --port 8045 --model-provider claude-kiro-oauth",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop kiro2api",
+    "pm2:restart": "pm2 restart kiro2api",
+    "pm2:delete": "pm2 delete kiro2api",
+    "pm2:logs": "pm2 logs kiro2api",
+    "pm2:status": "pm2 status",
+    "pm2:monit": "pm2 monit",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:verbose": "jest --verbose",
+    "test:silent": "jest --silent",
+    "test:unit": "node run-tests.js --unit",
+    "test:integration": "node run-tests.js --integration",
+    "test:summary": "node test-summary.js"
+  }
+}

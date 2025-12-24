@@ -1,0 +1,19 @@
+{
+  "REQUIRED_API_KEY": "your-secret-key-here",
+  "SERVER_PORT": 8045,
+  "HOST": "0.0.0.0",
+  "MODEL_PROVIDER": "claude-kiro-oauth",
+  "KIRO_OAUTH_CREDS_BASE64": null,
+  "KIRO_OAUTH_CREDS_FILE_PATH": "./configs/kiro/kiro-auth-token.json",
+  "SYSTEM_PROMPT_FILE_PATH": "input_system_prompt.txt",
+  "SYSTEM_PROMPT_MODE": "overwrite",
+  "PROMPT_LOG_BASE_NAME": "prompt_log",
+  "PROMPT_LOG_MODE": "none",
+  "REQUEST_MAX_RETRIES": 8,
+  "REQUEST_BASE_DELAY": 3000,
+  "CRON_NEAR_MINUTES": 15,
+  "CRON_REFRESH_TOKEN": true,
+  "PROVIDER_POOLS_FILE_PATH": "provider_pools.json",
+  "MAX_ERROR_COUNT": 5,
+  "ENABLE_THINKING_BY_DEFAULT": true
+}

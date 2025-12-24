@@ -1,0 +1,246 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :root {
+    /* Gradient Navigation Colors (Dribbble 19584973) */
+    --g1: #8a2be2; /* purple */
+    --g2: #2d7dff; /* blue */
+    --bg: #0b0b0d;
+    --panel: #12121a;
+    --text: #eaeaf0;
+    --muted-text: #b7b7c6;
+
+    /* Fitness Dashboard Theme (Dribbble 24613603) */
+    --fitness-bg: #0a0a0a;
+    --fitness-card: #161616;
+    --fitness-card-hover: #1a1a1a;
+    --fitness-border: rgba(255, 255, 255, 0.05);
+    --fitness-accent: #00d9a3;
+    --fitness-accent-dim: rgba(0, 217, 163, 0.1);
+
+    /* Finance UI Theme (Dribbble 14670971) */
+    --finance-bg: #F3F5FB;
+    --finance-card: #FFFFFF;
+    --finance-accent: #5B4BFF;
+
+    /* Fintech Dashboard Theme (Dribbble 16505891) */
+    --fintech-dark: #050404;
+    --fintech-brown: #60483B;
+    --fintech-brown-dark: #4D362C;
+    --fintech-orange: #E75D36;
+    --fintech-orange-light: #FC8D5E;
+    --fintech-green: #40A86B;
+    --fintech-green-dark: #3F5B4A;
+  }
+}
+
+@layer utilities {
+  /* Gradient Navigation Utilities */
+  .nav-gradient-border {
+    position: relative;
+    border-radius: 999px;
+  }
+
+  .nav-gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(90deg, var(--g1), var(--g2));
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+
+  /* Custom Animation Easing */
+  .ease-smooth {
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  /* External Glow Effects */
+  .glow-purple {
+    filter: drop-shadow(0 0 12px rgba(138, 43, 226, 0.4));
+  }
+
+  .glow-blue {
+    filter: drop-shadow(0 0 12px rgba(45, 125, 255, 0.4));
+  }
+
+  .glow-gradient {
+    filter: drop-shadow(0 0 16px rgba(138, 43, 226, 0.3)) drop-shadow(0 0 12px rgba(45, 125, 255, 0.3));
+  }
+
+  /* Fitness Dashboard Card Shadows */
+  .fitness-card-shadow {
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Finance UI Soft Shadows */
+  .finance-soft-shadow {
+    box-shadow: 0 4px 20px rgba(91, 75, 255, 0.08);
+  }
+
+  /* Fade-in animations */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes scaleIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes slideInLeft {
+    from {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+
+  .animate-fade-in-up {
+    animation: fadeInUp 0.6s ease-out forwards;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.5s ease-out forwards;
+  }
+
+  .animate-slide-in-left {
+    animation: slideInLeft 0.5s ease-out forwards;
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  /* Stagger animation delays */
+  .delay-100 { animation-delay: 100ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+  .delay-600 { animation-delay: 600ms; }
+}

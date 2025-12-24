@@ -1,0 +1,22 @@
+{
+  "claude-kiro-oauth": [
+    {
+      "uuid": "example-account-1",
+      "KIRO_OAUTH_CREDS_FILE_PATH": "./configs/kiro/kiro-auth-token-1.json",
+      "isHealthy": true,
+      "usageCount": 0,
+      "errorCount": 0,
+      "lastUsed": null,
+      "lastHealthCheck": null
+    },
+    {
+      "uuid": "example-account-2",
+      "KIRO_OAUTH_CREDS_FILE_PATH": "./configs/kiro/kiro-auth-token-2.json",
+      "isHealthy": true,
+      "usageCount": 0,
+      "errorCount": 0,
+      "lastUsed": null,
+      "lastHealthCheck": null
+    }
+  ]
+}

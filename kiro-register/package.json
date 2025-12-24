@@ -1,0 +1,20 @@
+{
+  "name": "kiro-register",
+  "version": "1.0.0",
+  "description": "Kiro 批量注册工具 - 使用 Roxy Browser 指纹浏览器自动化注册 AWS Builder ID",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "register": "node index.js --register",
+    "test-browser": "node index.js --test-browser",
+    "test-email": "node index.js --test-email"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "playwright-core": "^1.40.0",
+    "ws": "^8.14.0"
+  },
+  "author": "",
+  "license": "MIT"
+}

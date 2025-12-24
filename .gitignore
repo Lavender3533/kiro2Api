@@ -1,0 +1,259 @@
+# ==========================================
+# 敏感信息 - 绝对不要提交
+# ==========================================
+
+# 配置文件（包含 API 密钥和敏感信息）
+config.json
+provider_pools.json
+kiro-oauth-states.json
+token-store.json
+usage-cache.json
+
+# Kiro OAuth 认证文件
+configs/
+configs/kiro/*.json
+configs/qwen/*.json
+configs/gemini/*.json
+
+# 邮箱池文件
+yx.txt
+kiro-register/data/*.txt
+kiro-register/data/*.json
+
+# 系统提示文件（可能包含敏感信息）
+fetch_system_prompt.txt
+input_system_prompt.txt
+
+# ==========================================
+# 日志文件
+# ==========================================
+
+*.log
+logs/
+server.log
+kiro-register/logs/*.log
+
+# PM2 日志
+.pm2/
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# ==========================================
+# Node.js
+# ==========================================
+
+# 依赖
+node_modules/
+jspm_packages/
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# 可选的 npm 缓存目录
+.npm
+
+# 可选的 eslint 缓存
+.eslintcache
+
+# 可选的 REPL 历史
+.node_repl_history
+
+# 输出的编译二进制文件
+*.tsbuildinfo
+
+# ==========================================
+# 前端构建产物
+# ==========================================
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+
+# 静态文件（构建产物）
+static/
+static_old/
+static.old/
+static.backup*/
+
+# ==========================================
+# 开发工具
+# ==========================================
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# ==========================================
+# 操作系统
+# ==========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ==========================================
+# 临时文件
+# ==========================================
+
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*.swp
+*.swo
+*~.nib
+local.properties
+
+# ==========================================
+# 测试和覆盖率
+# ==========================================
+
+coverage/
+*.lcov
+.nyc_output
+lib-cov
+.grunt
+.lock-wscript
+build/Release
+
+# ==========================================
+# 环境变量
+# ==========================================
+
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.backup
+
+# ==========================================
+# 缓存和数据库
+# ==========================================
+
+*.cache
+.cache/
+.parcel-cache/
+.next/cache/
+
+# TypeScript
+*.tsbuildinfo
+.tsbuildinfo
+
+# Optional stylelint cache
+.stylelintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# ==========================================
+# 压缩文件
+# ==========================================
+
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ==========================================
+# 其他
+# ==========================================
+
+# Serverless directories
+.serverless/
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# yarn v2
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Roxy Browser 配置（包含敏感 token）
+kiro-register/config.js
+
+# 结果文件
+kiro-register/results/
+temp_ssh_key
+nul
+${newMsgSize}
