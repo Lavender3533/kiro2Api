@@ -10,7 +10,7 @@
 
 Kiro OAuth 2 API 是一个强大的代理服务，将 AWS CodeWhisperer (Kiro) 的 OAuth 认证转换为 Claude API 兼容格式。支持 Claude Code、Cursor 等 AI 编程工具，提供完整的 Provider Pool 管理功能。
 
-**AntiHook 工具**: 本项目使用的 AntiHook 工具来自 [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook)，用于绕过某些限制。
+**AntiHook 工具**: 本项目使用的 AntiHook 工具来自 [AntiHub-Project/AntiHook](https://github.com/AntiHub-Project/AntiHook)。
 
 ### 主要改进
 
