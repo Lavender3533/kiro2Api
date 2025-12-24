@@ -254,6 +254,41 @@ kiro-register/config.js
 
 # 结果文件
 kiro-register/results/
+
+# ==========================================
+# 开发和测试文件（不需要提交）
+# ==========================================
+
+# 测试文件
+test-*.js
+test-*.html
+test-*.mjs
+
+# 部署脚本和文档
+deploy*.bat
+deploy*.md
+deploy-instructions.txt
+
+# Windows 批处理脚本
+*.bat
+!start-pm2.bat
+!stop-pm2.bat
+!restart-pm2.bat
+
+# PowerShell 脚本
+*.ps1
+tools/*.ps1
+
+# 临时和分析文件
+pwd
+KIRO-ANALYSIS.txt
+DEPLOY-FORMAT-FIX.md
+
+# 用户脚本
+kiro-oauth-auto-clear.user.js
+
+# Claude Code 配置
+.claude/
 temp_ssh_key
 nul
 ${newMsgSize}
