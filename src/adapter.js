@@ -117,6 +117,9 @@ export function getServiceAdapter(config) {
             console.warn(`[Adapter] Unknown provider ${provider}, defaulting to Kiro adapter`);
             serviceInstances[providerKey] = new KiroApiServiceAdapter(config);
         }
+    } else {
+        // 更新缓存实例的 config（确保 ENABLE_THINKING_BY_DEFAULT 等配置被正确传递）
+        serviceInstances[providerKey].kiroApiService.config = config;
     }
     return serviceInstances[providerKey];
 }

@@ -226,6 +226,8 @@ export async function getApiService(config, requestedModel = null, options = {})
             serviceConfig = deepmerge(config, selectedProviderConfig);
             delete serviceConfig.providerPools; // 移除 providerPools 属性
             config.uuid = serviceConfig.uuid;
+            // 确保 ENABLE_THINKING_BY_DEFAULT 被正确传递
+            console.log(`[API Service] ENABLE_THINKING_BY_DEFAULT after merge: ${serviceConfig.ENABLE_THINKING_BY_DEFAULT}`);
             console.log(`[API Service] Using pooled configuration for ${config.MODEL_PROVIDER}: ${serviceConfig.uuid}${requestedModel ? ` (model: ${requestedModel})` : ''}`);
         } else {
             console.warn(`[API Service] No healthy provider found in pool for ${config.MODEL_PROVIDER}${requestedModel ? ` supporting model: ${requestedModel}` : ''}. Falling back to main config.`);

@@ -156,7 +156,56 @@ const refreshTokenDebounceMap = new Map(); // key: refreshToken, value: { lastAt
  * Provides OpenAI-compatible API for Claude Sonnet 4 via Kiro/CodeWhisperer
  */
 
+/**
+ * 生成随机的 MAC 地址哈希（用于设备指纹随机化）
+ * 每次调用生成不同的虚拟设备指纹，降低批量注册检测风险
+ */
 async function getMacAddressSha256() {
+    // 生成随机的虚拟 MAC 地址（格式: xx:xx:xx:xx:xx:xx）
+    const randomMac = Array.from({ length: 6 }, () =>
+        Math.floor(Math.random() * 256).toString(16).padStart(2, '0')
+    ).join(':');
+
+    const sha256Hash = crypto.createHash('sha256').update(randomMac).digest('hex');
+    return sha256Hash;
+}
+
+/**
+ * 生成随机化的 User-Agent 组件
+ */
+function generateRandomUserAgentComponents() {
+    // 随机 Windows 版本
+    const winVersions = ['10.0.19041', '10.0.19042', '10.0.19043', '10.0.19044', '10.0.19045',
+                         '10.0.22000', '10.0.22621', '10.0.22631', '10.0.26100'];
+    const randomWinVersion = winVersions[Math.floor(Math.random() * winVersions.length)];
+
+    // 随机 Node.js 版本
+    const nodeVersions = ['18.17.0', '18.18.0', '18.19.0', '20.10.0', '20.11.0', '20.12.0',
+                          '22.0.0', '22.1.0', '22.2.0', '22.11.0', '22.12.0', '22.21.1'];
+    const randomNodeVersion = nodeVersions[Math.floor(Math.random() * nodeVersions.length)];
+
+    // 随机 SDK 版本
+    const sdkVersions = ['1.0.24', '1.0.25', '1.0.26', '1.0.27', '1.0.28'];
+    const randomSdkVersion = sdkVersions[Math.floor(Math.random() * sdkVersions.length)];
+
+    // 随机 Kiro 版本
+    const kiroVersions = ['0.7.40', '0.7.41', '0.7.42', '0.7.43', '0.7.44', '0.7.45', '0.7.46'];
+    const randomKiroVersion = kiroVersions[Math.floor(Math.random() * kiroVersions.length)];
+
+    // 随机 OS 类型
+    const osTypes = ['win32', 'darwin', 'linux'];
+    const randomOs = osTypes[Math.floor(Math.random() * osTypes.length)];
+
+    return {
+        winVersion: randomWinVersion,
+        nodeVersion: randomNodeVersion,
+        sdkVersion: randomSdkVersion,
+        kiroVersion: randomKiroVersion,
+        osType: randomOs
+    };
+}
+
+async function getOriginalMacAddressSha256() {
     const networkInterfaces = os.networkInterfaces();
     let macAddress = '';
 
@@ -173,7 +222,7 @@ async function getMacAddressSha256() {
 
     if (!macAddress) {
         console.warn("无法获取MAC地址，将使用默认值。");
-        macAddress = '00:00:00:00:00:00'; // Fallback if no MAC address is found
+        macAddress = '00:00:00:00:00:00';
     }
 
     const sha256Hash = crypto.createHash('sha256').update(macAddress).digest('hex');
@@ -375,6 +424,7 @@ export class KiroApiService {
         this.credsBase64 = config.KIRO_OAUTH_CREDS_BASE64;
         this.useSystemProxy = config?.USE_SYSTEM_PROXY_KIRO ?? false;
         console.log(`[Kiro] System proxy ${this.useSystemProxy ? 'enabled' : 'disabled'}`);
+        console.log(`[Kiro] ENABLE_THINKING_BY_DEFAULT in config: ${config.ENABLE_THINKING_BY_DEFAULT}`);
 
         // Add kiro-oauth-creds-base64 and kiro-oauth-creds-file to config
         if (config.KIRO_OAUTH_CREDS_BASE64) {
@@ -401,8 +451,11 @@ export class KiroApiService {
         if (!skipAuthCheck) {
             await this.initializeAuth();
         }
+
+        // 生成随机化的设备指纹
         const macSha256 = await getMacAddressSha256();
-        const kiroVersion = KIRO_CONSTANTS.KIRO_VERSION;
+        const uaComponents = generateRandomUserAgentComponents();
+
         // 配置 HTTP/HTTPS agent 限制连接池大小，避免资源泄漏
         const httpAgent = new http.Agent({
             keepAlive: true,
@@ -416,7 +469,14 @@ export class KiroApiService {
             maxFreeSockets: 5,
             timeout: 120000,
         });
-        
+
+        // 构建随机化的 User-Agent
+        const randomizedUserAgent = `aws-sdk-js/${uaComponents.sdkVersion} ua/2.1 os/${uaComponents.osType}#${uaComponents.winVersion} lang/js md/nodejs#${uaComponents.nodeVersion} api/codewhispererstreaming#${uaComponents.sdkVersion} m/N,E KiroIDE-${uaComponents.kiroVersion}-${macSha256}`;
+        const randomizedAmzUserAgent = `aws-sdk-js/${uaComponents.sdkVersion} KiroIDE-${uaComponents.kiroVersion}-${macSha256}`;
+
+        // 随机化请求重试次数
+        const maxRetries = 2 + Math.floor(Math.random() * 3); // 2-4
+
         const axiosConfig = {
             timeout: KIRO_CONSTANTS.AXIOS_TIMEOUT,
             httpAgent,
@@ -424,10 +484,10 @@ export class KiroApiService {
             headers: {
                 'Content-Type': KIRO_CONSTANTS.CONTENT_TYPE_JSON,
                 'Accept': KIRO_CONSTANTS.ACCEPT_JSON,
-                'amz-sdk-request': 'attempt=1; max=3',
+                'amz-sdk-request': `attempt=1; max=${maxRetries}`,
                 'x-amzn-kiro-agent-mode': 'vibe',
-                'x-amz-user-agent': `aws-sdk-js/1.0.26 KiroIDE-${kiroVersion}-${macSha256}`,
-                'user-agent': `aws-sdk-js/1.0.26 ua/2.1 os/win32#10.0.26100 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.26 m/N,E KiroIDE-${kiroVersion}-${macSha256}`
+                'x-amz-user-agent': randomizedAmzUserAgent,
+                'user-agent': randomizedUserAgent
             },
         };
         
@@ -2984,10 +3044,12 @@ async initializeAuth(forceRefresh = false) {
                 } else if (event.type === 'metering') {
                     // Token 计量事件
                     const meterData = event.data;
+                    console.log(`[Kiro Debug] Metering event received:`, JSON.stringify(meterData));
                     if (meterData.usage !== undefined) {
                         // Kiro 返回的是 credit usage，需要转换为 token
                         // 粗略估计：1 credit ≈ 1000 tokens（这个需要根据实际情况调整）
                         const estimatedTokens = Math.ceil(meterData.usage * 1000);
+                        console.log(`[Kiro Debug] Metering: usage=${meterData.usage}, unit=${meterData.unit}, estimatedTokens=${estimatedTokens}`);
                         outputTokens = estimatedTokens;
                     }
                 } else if (event.type === 'codeReference') {
@@ -3131,6 +3193,7 @@ async initializeAuth(forceRefresh = false) {
             if (thinkingContent) {
                 outputTokens += this.countTextTokens(thinkingContent);
             }
+            console.log(`[Kiro Debug] Token calculation: totalContent.length=${totalContent.length}, thinkingContent.length=${thinkingContent.length}, outputTokens=${outputTokens}`);
             for (const tc of toolCalls) {
                 outputTokens += this.countTextTokens(JSON.stringify(tc.input || {}));
             }

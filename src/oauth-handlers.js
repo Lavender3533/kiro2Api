@@ -58,12 +58,19 @@ export async function handleKiroOAuth(currentConfig, providerPoolManager = null)
 
         // Step 1: 自动注册 Client (调用 AWS SSO OIDC RegisterClient API)
         const registerClientUrl = `https://oidc.${region}.amazonaws.com/client/register`;
+
+        // 随机化 Client 配置，降低批量注册特征
+        const randomSuffix = Math.random().toString(36).substring(2, 8);
+        const randomPort = 10000 + Math.floor(Math.random() * 50000);
+        const clientNames = ['Kiro IDE', 'Kiro', 'Kiro Editor', 'Kiro Dev', 'AWS Kiro'];
+        const randomClientName = clientNames[Math.floor(Math.random() * clientNames.length)];
+
         const registerClientBody = {
-            clientName: 'Kiro IDE',
+            clientName: `${randomClientName}-${randomSuffix}`,
             clientType: 'public',
             scopes: scopes,
             grantTypes: ['authorization_code', 'refresh_token'],
-            redirectUris: ['http://127.0.0.1/oauth/callback'],
+            redirectUris: [`http://127.0.0.1:${randomPort}/oauth/callback`],
             issuerUrl: startUrl
         };
 
