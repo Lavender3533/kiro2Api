@@ -258,8 +258,9 @@ export class ProviderPoolManager {
      * @param {object} providerConfig - The configuration of the provider to mark.
      * @param {boolean} resetUsageCount - Whether to reset usage count (optional, default: false).
      * @param {string} [healthCheckModel] - Optional model name used for health check.
+     * @param {object} [userInfo] - Optional user info (email, userId) from getUsageLimits.
      */
-    markProviderHealthy(providerType, providerConfig, resetUsageCount = false, healthCheckModel = null) {
+    markProviderHealthy(providerType, providerConfig, resetUsageCount = false, healthCheckModel = null, userInfo = null) {
         if (!providerConfig?.uuid) {
             this._log('error', 'Invalid providerConfig in markProviderHealthy');
             return;
@@ -271,13 +272,24 @@ export class ProviderPoolManager {
             provider.config.errorCount = 0;
             provider.config.lastErrorTime = null;
             provider.config.lastErrorMessage = null;
-            
+
             // 更新健康检测信息
             provider.config.lastHealthCheckTime = new Date().toISOString();
             if (healthCheckModel) {
                 provider.config.lastHealthCheckModel = healthCheckModel;
             }
-            
+
+            // 缓存用户信息（邮箱等）
+            if (userInfo) {
+                if (userInfo.email && provider.config.cachedEmail !== userInfo.email) {
+                    provider.config.cachedEmail = userInfo.email;
+                    provider.config.cachedAt = new Date().toISOString();
+                }
+                if (userInfo.userId && provider.config.cachedUserId !== userInfo.userId) {
+                    provider.config.cachedUserId = userInfo.userId;
+                }
+            }
+
             // 只有在明确要求重置使用计数时才重置
             if (resetUsageCount) {
                 provider.config.usageCount = 0;
@@ -286,7 +298,7 @@ export class ProviderPoolManager {
                 provider.config.lastUsed = new Date().toISOString();
             }
             this._log('info', `Marked provider as healthy: ${provider.config.uuid} for type ${providerType}${resetUsageCount ? ' (usage count reset)' : ''}`);
-            
+
             this._debouncedSave(providerType);
         }
     }
@@ -404,12 +416,12 @@ export class ProviderPoolManager {
                 if (!providerStatus.config.isHealthy) {
                     // Provider was unhealthy but is now healthy
                     // 恢复健康时不重置使用计数，保持原有值
-                    this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
+                    this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName, healthResult.userInfo);
                     this._log('info', `Health check for ${providerConfig.uuid} (${providerType}): Marked Healthy (actual check)`);
                 } else {
                     // Provider was already healthy and still is
                     // 只在初始化时重置使用计数
-                    this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
+                    this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName, healthResult.userInfo);
                     this._log('debug', `Health check for ${providerConfig.uuid} (${providerType}): Still Healthy`);
                 }
             } else {
@@ -518,7 +530,26 @@ export class ProviderPoolManager {
             try {
                 this._log('debug', `Health check attempt ${i + 1}/${maxRetries} for ${modelName}: ${JSON.stringify(healthCheckRequest)}`);
                 await serviceAdapter.generateContent(modelName, healthCheckRequest);
-                return { success: true, modelName, errorMessage: null };
+
+                // 健康检查成功后，尝试获取用户信息（邮箱等）
+                let userInfo = null;
+                try {
+                    if (typeof serviceAdapter.getUsageLimits === 'function') {
+                        const usageData = await serviceAdapter.getUsageLimits();
+                        // 注意：返回的字段是 userInfo，不是 user
+                        if (usageData && usageData.userInfo) {
+                            userInfo = {
+                                email: usageData.userInfo.email,
+                                userId: usageData.userInfo.userId
+                            };
+                            this._log('info', `Fetched user info: ${userInfo.email}`);
+                        }
+                    }
+                } catch (userInfoError) {
+                    this._log('debug', `Failed to fetch user info: ${userInfoError.message}`);
+                }
+
+                return { success: true, modelName, errorMessage: null, userInfo };
             } catch (error) {
                 lastError = error;
                 this._log('debug', `Health check attempt ${i + 1} failed for ${providerType}: ${error.message}`);

@@ -1959,7 +1959,7 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
             }
 
             if (healthResult.success) {
-                providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName);
+                providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName, healthResult.userInfo);
             } else {
                 providerPoolManager.markProviderUnhealthy(providerType, providerConfig, healthResult.error);
             }
@@ -2169,11 +2169,12 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
                     }
                     
                     if (healthResult.success) {
-                        providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName);
+                        providerPoolManager.markProviderHealthy(providerType, providerConfig, false, healthResult.modelName, healthResult.userInfo);
                         results.push({
                             uuid: providerConfig.uuid,
                             success: true,
                             modelName: healthResult.modelName,
+                            email: healthResult.userInfo?.email,
                             message: '健康'
                         });
                     } else {
