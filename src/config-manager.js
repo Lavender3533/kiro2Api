@@ -99,7 +99,13 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
                     CRON_REFRESH_TOKEN: true,
                     PROVIDER_POOLS_FILE_PATH: "provider_pools.json",
                     MAX_ERROR_COUNT: 5,
-                    ENABLE_THINKING_BY_DEFAULT: true
+                    ENABLE_THINKING_BY_DEFAULT: true,
+                    // SQLite 模式配置
+                    USE_SQLITE_POOL: false,
+                    SQLITE_DB_PATH: "data/provider_pool.db",
+                    USAGE_CACHE_TTL: 300,
+                    HEALTH_CHECK_CONCURRENCY: 5,
+                    USAGE_QUERY_CONCURRENCY: 10
                 };
 
                 // 创建 config.json
@@ -127,7 +133,13 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
                 CRON_REFRESH_TOKEN: true,
                 PROVIDER_POOLS_FILE_PATH: "provider_pools.json",
                 MAX_ERROR_COUNT: 5,
-                ENABLE_THINKING_BY_DEFAULT: true
+                ENABLE_THINKING_BY_DEFAULT: true,
+                // SQLite 模式配置
+                USE_SQLITE_POOL: false,
+                SQLITE_DB_PATH: "data/provider_pool.db",
+                USAGE_CACHE_TTL: 300,
+                HEALTH_CHECK_CONCURRENCY: 5,
+                USAGE_QUERY_CONCURRENCY: 10
             };
             console.log('[Config] Using default configuration.');
         }

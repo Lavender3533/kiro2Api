@@ -1,5 +1,6 @@
 import { getServiceAdapter, serviceInstances } from './adapter.js';
 import { ProviderPoolManager } from './provider-pool-manager.js';
+import { SQLiteProviderPoolManager } from './sqlite-provider-pool-manager.js';
 import deepmerge from 'deepmerge';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
@@ -15,6 +16,8 @@ import {
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
+// 是否使用 SQLite 模式
+let useSQLiteMode = false;
 
 /**
  * 扫描 configs 目录并自动关联未关联的配置文件到对应的提供商
@@ -162,13 +165,32 @@ export async function initApiService(config) {
     // 自动关联 configs 目录中的配置文件到对应的提供商
     console.log('[Initialization] Checking for unlinked provider configs...');
     await autoLinkProviderConfigs(config);
-    
+
+    // 检查是否启用 SQLite 模式
+    useSQLiteMode = config.USE_SQLITE_POOL === true;
+
     if (config.providerPools && Object.keys(config.providerPools).length > 0) {
-        providerPoolManager = new ProviderPoolManager(config.providerPools, {
-            globalConfig: config,
-            maxErrorCount: config.MAX_ERROR_COUNT ?? 3
-        });
-        console.log('[Initialization] ProviderPoolManager initialized with configured pools.');
+        if (useSQLiteMode) {
+            // 使用 SQLite 模式
+            providerPoolManager = new SQLiteProviderPoolManager({
+                globalConfig: config,
+                maxErrorCount: config.MAX_ERROR_COUNT ?? 3,
+                dbPath: config.SQLITE_DB_PATH || 'data/provider_pool.db',
+                usageCacheTTL: config.USAGE_CACHE_TTL ?? 300,
+                healthCheckConcurrency: config.HEALTH_CHECK_CONCURRENCY ?? 5,
+                usageQueryConcurrency: config.USAGE_QUERY_CONCURRENCY ?? 10
+            });
+            // 从 JSON 导入提供商配置到 SQLite
+            providerPoolManager.importFromJson(config.providerPools);
+            console.log('[Initialization] SQLiteProviderPoolManager initialized with configured pools.');
+        } else {
+            // 使用传统 JSON 模式
+            providerPoolManager = new ProviderPoolManager(config.providerPools, {
+                globalConfig: config,
+                maxErrorCount: config.MAX_ERROR_COUNT ?? 3
+            });
+            console.log('[Initialization] ProviderPoolManager initialized with configured pools.');
+        }
         // 健康检查将在服务器完全启动后执行
     } else {
         console.log('[Initialization] No provider pools configured. Using single provider mode.');
@@ -252,5 +274,96 @@ export function getProviderPoolManager() {
 export function markProviderUnhealthy(provider, providerInfo) {
     if (providerPoolManager) {
         providerPoolManager.markProviderUnhealthy(provider, providerInfo);
+    }
+}
+
+/**
+ * Check if SQLite mode is enabled
+ * @returns {boolean} Whether SQLite mode is enabled
+ */
+export function isSQLiteMode() {
+    return useSQLiteMode;
+}
+
+/**
+ * Get pool statistics
+ * @param {string} providerType - Optional provider type filter
+ * @returns {Object} Pool statistics
+ */
+export function getPoolStats(providerType = null) {
+    if (!providerPoolManager) return null;
+
+    if (useSQLiteMode && typeof providerPoolManager.getPoolStats === 'function') {
+        return providerPoolManager.getPoolStats(providerType);
+    }
+
+    // JSON 模式的统计
+    if (providerPoolManager.providerStatus) {
+        const stats = {};
+        for (const type in providerPoolManager.providerStatus) {
+            if (providerType && type !== providerType) continue;
+            const providers = providerPoolManager.providerStatus[type];
+            stats[type] = {
+                total: providers.length,
+                healthy: providers.filter(p => p.config.isHealthy && !p.config.isDisabled).length,
+                unhealthy: providers.filter(p => !p.config.isHealthy).length,
+                disabled: providers.filter(p => p.config.isDisabled).length,
+                totalUsage: providers.reduce((sum, p) => sum + (p.config.usageCount || 0), 0),
+                totalErrors: providers.reduce((sum, p) => sum + (p.config.errorCount || 0), 0)
+            };
+        }
+        return providerType ? stats[providerType] : stats;
+    }
+
+    return null;
+}
+
+/**
+ * Get usage with cache (SQLite mode only)
+ * @param {string} providerType - Provider type
+ * @param {string} uuid - Provider UUID
+ * @param {Function} fetchFn - Function to fetch usage if not cached
+ * @returns {Promise<Object>} Usage data
+ */
+export async function getUsageWithCache(providerType, uuid, fetchFn) {
+    if (useSQLiteMode && providerPoolManager && typeof providerPoolManager.getUsageWithCache === 'function') {
+        return providerPoolManager.getUsageWithCache(providerType, uuid, fetchFn);
+    }
+    // 非 SQLite 模式直接调用
+    return fetchFn();
+}
+
+/**
+ * Batch get usage (SQLite mode only)
+ * @param {string} providerType - Provider type
+ * @param {Function} fetchFn - Function to fetch usage for a single provider (uuid) => Promise<usageData>
+ * @returns {Promise<Array>} Array of usage results
+ */
+export async function batchGetUsage(providerType, fetchFn) {
+    if (useSQLiteMode && providerPoolManager && typeof providerPoolManager.batchGetUsage === 'function') {
+        return providerPoolManager.batchGetUsage(providerType, fetchFn);
+    }
+    // 非 SQLite 模式：串行获取
+    const pools = providerPoolManager?.getProviderPools?.(providerType) || [];
+    const results = [];
+    for (const pool of pools) {
+        try {
+            const usage = await fetchFn(pool.uuid);
+            results.push({ uuid: pool.uuid, usage });
+        } catch (error) {
+            results.push({ uuid: pool.uuid, error: error.message });
+        }
+    }
+    return results;
+}
+
+/**
+ * Invalidate usage cache (SQLite mode only)
+ * @param {string} providerType - Provider type
+ * @param {string} uuid - Optional provider UUID
+ */
+export function invalidateUsageCache(providerType, uuid = null) {
+    if (useSQLiteMode && providerPoolManager && typeof providerPoolManager.invalidateUsageCache === 'function') {
+        providerPoolManager.invalidateUsageCache(providerType, uuid);
     }
 }

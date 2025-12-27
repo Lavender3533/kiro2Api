@@ -3,6 +3,8 @@ import path from 'path';
 import os from 'os';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { isSQLiteMode } from './service-manager.js';
+import { sqliteDB } from './sqlite-db.js';
 
 // 延迟导入 broadcastEvent 避免循环依赖
 let _broadcastEvent = null;
@@ -195,10 +197,19 @@ export async function handleKiroOAuth(currentConfig, providerPoolManager = null)
                     writeFileSync(poolsFilePath, JSON.stringify(providerPools, null, 2), 'utf8');
                     console.log(`${KIRO_OAUTH_CONFIG.logPrefix} Auto-added to provider pool with UUID: ${newProvider.uuid}`);
 
-                    // 更新 provider pool manager
+                    // 更新 provider pool manager（区分 SQLite 和 JSON 模式）
                     if (providerPoolManager) {
-                        providerPoolManager.providerPools = providerPools;
-                        providerPoolManager.initializeProviderStatus();
+                        if (isSQLiteMode()) {
+                            // SQLite 模式：直接插入数据库
+                            sqliteDB.upsertProvider({
+                                ...newProvider,
+                                providerType: 'claude-kiro-oauth'
+                            });
+                        } else {
+                            // JSON 模式：更新内存并重建状态
+                            providerPoolManager.providerPools = providerPools;
+                            providerPoolManager.initializeProviderStatus();
+                        }
                     }
 
                     // 广播提供商更新事件

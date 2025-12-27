@@ -299,3 +299,25 @@ list-models-*.js
 temp_ssh_key
 nul
 ${newMsgSize}
+
+# SSH 密钥
+my_ssh_key*
+*.pem
+id_rsa*
+id_ed25519*
+
+# SQLite 数据库
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 注册机（不要提交）
+kiro-register/
+kiro-register-clean/
+kiro-register-dist/
+register.py
+
+# PM2 配置文档
+PM2-DEPLOY.md
+KIRO-ADVANCED-FEATURES.md

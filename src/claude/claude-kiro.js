@@ -51,11 +51,11 @@ const KIRO_CONSTANTS = {
 
 // Thinking 功能的提示词模板（通过 prompt injection 实现，参考 cifang）
 // 优化版本：在简洁和效果之间平衡（~80 tokens）
-const THINKING_PROMPT_TEMPLATE = `Before responding, analyze the problem thoroughly inside <thinking>...</thinking> tags:
-- Break down complex tasks into clear steps
-- Consider edge cases and potential issues
-- Verify tool parameters match requirements exactly
-Then provide your well-reasoned response.`;
+const THINKING_PROMPT_TEMPLATE = `在回复之前，请在 <thinking>...</thinking> 标签内进行深入分析：
+- 将复杂任务分解为清晰的步骤
+- 考虑边界情况和潜在问题
+- 确保工具参数完全符合要求
+然后提供经过充分思考的回复。`;
 
 // Kiro 优化：HTML 转义字符处理（完美复刻官方 Kiro extension.js:578020-578035）
 function unescapeHTML(str) {
@@ -153,7 +153,378 @@ const MODEL_MAPPING = Object.fromEntries(
     Object.entries(FULL_MODEL_MAPPING).filter(([key]) => KIRO_MODELS.includes(key))
 );
 
+// ============================================================================
+// CC→Kiro 工具映射表
+// Claude Code 发送 30+ 工具，Kiro 只支持 ~15 个
+// 通过映射减少工具数量，避免 400 错误
+// ============================================================================
+
+const CC_TO_KIRO_TOOL_MAPPING = {
+    // ===== 直接映射（参数名转换）=====
+    'Read': {
+        kiroTool: 'readFile',
+        paramMap: { file_path: 'path', offset: 'start_line', limit: 'end_line' },
+        description: 'Read file content'
+    },
+    'Write': {
+        kiroTool: 'fsWrite',
+        paramMap: { file_path: 'path', content: 'text' },
+        description: 'Write file'
+    },
+    'Edit': {
+        kiroTool: 'strReplace',
+        paramMap: { file_path: 'path', old_string: 'oldStr', new_string: 'newStr' },
+        description: 'Replace text in file'
+    },
+    'Bash': {
+        kiroTool: 'executeBash',
+        paramMap: { command: 'command', timeout: 'timeout' },
+        description: 'Execute shell command'
+    },
+    'Glob': {
+        kiroTool: 'fileSearch',
+        paramMap: { pattern: 'query' },
+        description: 'Search files by pattern'
+    },
+    'Grep': {
+        kiroTool: 'grepSearch',
+        paramMap: { pattern: 'query', path: 'includePattern' },
+        description: 'Search content in files'
+    },
+    'LS': {
+        kiroTool: 'listDirectory',
+        paramMap: { path: 'path' },
+        description: 'List directory'
+    },
+    'AskUserQuestion': {
+        kiroTool: 'userInput',
+        paramMap: { question: 'question' },
+        description: 'Ask user for input'
+    },
+
+    // ===== 特殊处理 =====
+    'Task': {
+        kiroTool: 'invokeSubAgent',
+        paramMap: { subagent_type: 'name', prompt: 'prompt', description: 'explanation' },
+        description: 'Invoke sub-agent for complex tasks'
+    },
+    'LSP': { remove: true, reason: 'Kiro getDiagnostics is not equivalent to CC LSP operations' },
+    'KillShell': {
+        kiroTool: 'controlProcess',
+        paramMap: { shell_id: 'processId' },
+        fixedParams: { action: 'stop' },
+        description: 'Stop background process'
+    },
+    'TaskOutput': {
+        kiroTool: 'getProcessOutput',
+        paramMap: { task_id: 'processId' },
+        description: 'Get process output'
+    },
+
+    // ===== Builtin 工具（服务端模拟）=====
+    'WebSearch': {
+        kiroTool: 'webSearch',
+        paramMap: { query: 'query' },
+        description: 'Search the web for information (server-side implementation)',
+        serverSideExecute: true  // 标记为服务端执行
+    },
+    'WebFetch': { remove: true, reason: 'AWS CodeWhisperer does not support builtin tools' },
+
+    // ===== 不支持的工具（移除）=====
+    'TodoWrite': { remove: true, reason: 'Not supported by Kiro' },
+    'TodoRead': { remove: true, reason: 'Not supported by Kiro' },
+    'EnterPlanMode': { remove: true, reason: 'Not supported by Kiro' },
+    'ExitPlanMode': { remove: true, reason: 'Not supported by Kiro' },
+    'NotebookEdit': { remove: true, reason: 'Not supported by Kiro' },
+    'Skill': { remove: true, reason: 'CC internal only' },
+
+    // ===== 降级处理 =====
+    'NotebookRead': {
+        kiroTool: 'readFile',
+        paramMap: { notebook_path: 'path' },
+        description: 'Read notebook as file'
+    },
+};
+
+// Kiro 官方工具的简洁 Schema（从 extension.js 提取）
+const KIRO_TOOL_SCHEMAS = {
+    readFile: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'Path to file to read' },
+            start_line: { type: 'number', description: 'Starting line number (optional)' },
+            end_line: { type: 'number', description: 'Ending line number (optional)' },
+            explanation: { type: 'string', description: 'Why this tool is being used' }
+        },
+        required: ['path']
+    },
+    fsWrite: {
+        type: 'object',
+        properties: {
+            path: { type: 'string' },
+            text: { type: 'string' }
+        },
+        required: ['path', 'text']
+    },
+    strReplace: {
+        type: 'object',
+        properties: {
+            path: { type: 'string' },
+            oldStr: { type: 'string' },
+            newStr: { type: 'string' }
+        },
+        required: ['path', 'oldStr', 'newStr']
+    },
+    grepSearch: {
+        type: 'object',
+        properties: {
+            query: { type: 'string', description: 'The regex pattern to search for' },
+            caseSensitive: { type: 'boolean', description: 'Whether the search should be case sensitive' },
+            excludePattern: { type: 'string', description: 'Glob pattern for files to exclude' },
+            explanation: { type: 'string', description: 'Why this tool is being used' },
+            includePattern: { type: 'string', description: 'Glob pattern for files to include' }
+        },
+        required: ['query']
+    },
+    fileSearch: {
+        type: 'object',
+        properties: {
+            query: { type: 'string', description: 'The regex pattern to search for' },
+            explanation: { type: 'string', description: 'Fuzzy filename to search for' },
+            excludePattern: { type: 'string', description: 'Glob pattern for files to exclude' },
+            includeIgnoredFiles: { type: 'string', description: 'Whether to include .gitignore files (yes/no)' }
+        },
+        required: ['query']
+    },
+    executeBash: {
+        type: 'object',
+        properties: {
+            command: { type: 'string', description: 'Shell command to execute' },
+            path: { type: 'string', description: 'Path for current working directory' },
+            ignoreWarning: { type: 'boolean', description: 'Set to true to bypass long-running command warnings' },
+            timeout: { type: 'number', description: 'Command timeout in milliseconds' }
+        },
+        required: ['command']
+    },
+    listDirectory: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'Path to directory' },
+            explanation: { type: 'string', description: 'Why this tool is being used' },
+            depth: { type: 'number', description: 'Depth of a recursive directory listing' }
+        },
+        required: ['path']
+    },
+    userInput: {
+        type: 'object',
+        properties: {
+            question: { type: 'string', description: 'The question to ask the user' },
+            options: { type: 'array', items: { type: 'string' }, description: 'Predefined choices for the user' },
+            reason: { type: 'string', description: 'The reason the user is being asked for input' }
+        },
+        required: ['question']
+    },
+    getDiagnostics: {
+        type: 'object',
+        properties: {
+            paths: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['paths']
+    },
+    controlProcess: {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: ['start', 'stop', 'restart'] },
+            command: { type: 'string' },
+            processId: { type: 'string' }  // CC uses string task IDs like "b87d8a9"
+        },
+        required: ['action']
+    },
+    getProcessOutput: {
+        type: 'object',
+        properties: {
+            processId: { type: 'string' },  // CC uses string task IDs like "b87d8a9"
+            lines: { type: 'number' }
+        },
+        required: ['processId']
+    },
+    invokeSubAgent: {
+        type: 'object',
+        properties: {
+            name: { type: 'string', description: 'name of the agent to invoke' },
+            prompt: { type: 'string', description: 'The instruction or question for the agent' },
+            explanation: { type: 'string', description: 'One or two sentences explaining why this tool is being used' }
+        },
+        required: ['name', 'prompt']
+    },
+    // ===== 服务端模拟工具 =====
+    webSearch: {
+        type: 'object',
+        properties: {
+            query: { type: 'string', description: 'The search query' }
+        },
+        required: ['query']
+    }
+};
+
 const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
+
+// ===== 服务端 Web Search 实现 =====
+// 支持的搜索方式：DuckDuckGo (免费), Bing (需要 API Key)
+const WEB_SEARCH_CONFIG = {
+    // 搜索引擎选择：'duckduckgo' | 'bing' | 'google'
+    engine: process.env.WEB_SEARCH_ENGINE || 'duckduckgo',
+    // Bing Search API Key (可选)
+    bingApiKey: process.env.BING_API_KEY || '',
+    // 最大结果数
+    maxResults: parseInt(process.env.WEB_SEARCH_MAX_RESULTS) || 5,
+    // 超时时间 (ms)
+    timeout: 10000
+};
+
+/**
+ * 服务端 Web Search 函数
+ * @param {string} query - 搜索查询
+ * @returns {Promise<{success: boolean, results: Array, error?: string}>}
+ */
+async function executeWebSearch(query, verboseLogging = false) {
+    if (verboseLogging) {
+        console.log(`[Kiro WebSearch] Executing search: "${query}"`);
+    }
+
+    try {
+        // 优先使用 Bing API (如果配置了 API Key)
+        if (WEB_SEARCH_CONFIG.bingApiKey) {
+            return await bingSearch(query, verboseLogging);
+        }
+
+        // 否则使用 DuckDuckGo (免费，无需 API Key)
+        return await duckDuckGoSearch(query, verboseLogging);
+    } catch (error) {
+        console.error('[Kiro WebSearch] Error:', error.message);
+        return {
+            success: false,
+            results: [],
+            error: error.message
+        };
+    }
+}
+
+/**
+ * DuckDuckGo 搜索 (免费，无需 API Key)
+ * 使用 DuckDuckGo HTML 搜索页面抓取结果
+ */
+async function duckDuckGoSearch(query, verboseLogging = false) {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
+    const response = await axios.get(url, {
+        timeout: WEB_SEARCH_CONFIG.timeout,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+    });
+
+    const html = response.data;
+    const results = [];
+
+    // 简单的 HTML 解析提取搜索结果
+    // DuckDuckGo HTML 格式: <a class="result__a" href="...">Title</a>
+    const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+
+    let match;
+    while ((match = resultRegex.exec(html)) !== null && results.length < WEB_SEARCH_CONFIG.maxResults) {
+        const url = match[1];
+        const title = match[2].replace(/<[^>]*>/g, '').trim();
+        const snippet = match[3].replace(/<[^>]*>/g, '').trim();
+
+        if (url && title && !url.startsWith('/')) {
+            results.push({ title, url, snippet });
+        }
+    }
+
+    // 如果正则没匹配到，尝试另一种模式
+    if (results.length === 0) {
+        const altRegex = /<a[^>]*class="[^"]*result[^"]*"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
+        while ((match = altRegex.exec(html)) !== null && results.length < WEB_SEARCH_CONFIG.maxResults) {
+            const url = match[1];
+            const title = match[2].trim();
+            if (url && title && url.startsWith('http')) {
+                results.push({ title, url, snippet: '' });
+            }
+        }
+    }
+
+    if (verboseLogging) {
+        console.log(`[Kiro WebSearch] DuckDuckGo found ${results.length} results`);
+    }
+
+    return {
+        success: true,
+        results,
+        source: 'DuckDuckGo'
+    };
+}
+
+/**
+ * Bing Search API (需要 API Key)
+ */
+async function bingSearch(query, verboseLogging = false) {
+    const url = 'https://api.bing.microsoft.com/v7.0/search';
+
+    const response = await axios.get(url, {
+        timeout: WEB_SEARCH_CONFIG.timeout,
+        params: {
+            q: query,
+            count: WEB_SEARCH_CONFIG.maxResults,
+            responseFilter: 'Webpages'
+        },
+        headers: {
+            'Ocp-Apim-Subscription-Key': WEB_SEARCH_CONFIG.bingApiKey
+        }
+    });
+
+    const results = (response.data.webPages?.value || []).map(item => ({
+        title: item.name,
+        url: item.url,
+        snippet: item.snippet
+    }));
+
+    if (verboseLogging) {
+        console.log(`[Kiro WebSearch] Bing found ${results.length} results`);
+    }
+
+    return {
+        success: true,
+        results,
+        source: 'Bing'
+    };
+}
+
+/**
+ * 将搜索结果格式化为可读文本
+ */
+function formatSearchResults(searchResult) {
+    if (!searchResult.success) {
+        return `Search failed: ${searchResult.error || 'Unknown error'}`;
+    }
+
+    if (searchResult.results.length === 0) {
+        return 'No results found.';
+    }
+
+    let text = `Found ${searchResult.results.length} results (via ${searchResult.source}):\n\n`;
+
+    searchResult.results.forEach((result, index) => {
+        text += `${index + 1}. **${result.title}**\n`;
+        text += `   URL: ${result.url}\n`;
+        if (result.snippet) {
+            text += `   ${result.snippet}\n`;
+        }
+        text += '\n';
+    });
+
+    return text;
+}
 
 // 官方AWS SDK：模块级别的防抖变量，按refreshToken分组（不同账号可以并发刷新）
 // 使用Map存储每个refreshToken的防抖状态
@@ -431,7 +802,10 @@ export class KiroApiService {
         this.credPath = config.KIRO_OAUTH_CREDS_DIR_PATH || path.join(os.homedir(), ".aws", "sso", "cache");
         this.credsBase64 = config.KIRO_OAUTH_CREDS_BASE64;
         this.useSystemProxy = config?.USE_SYSTEM_PROXY_KIRO ?? false;
+        // 详细日志开关（默认关闭，只显示简洁日志）
+        this.verboseLogging = config?.ENABLE_VERBOSE_LOGGING ?? false;
         console.log(`[Kiro] System proxy ${this.useSystemProxy ? 'enabled' : 'disabled'}`);
+        console.log(`[Kiro] Verbose logging ${this.verboseLogging ? 'enabled' : 'disabled'}`);
         console.log(`[Kiro] ENABLE_THINKING_BY_DEFAULT in config: ${config.ENABLE_THINKING_BY_DEFAULT}`);
 
         // Add kiro-oauth-creds-base64 and kiro-oauth-creds-file to config
@@ -465,18 +839,27 @@ export class KiroApiService {
         const uaComponents = generateRandomUserAgentComponents();
 
         // 配置 HTTP/HTTPS agent 限制连接池大小，避免资源泄漏
+        // ⚠️ 修复：减少 keepAlive 超时，避免连接失效后仍被复用
         const httpAgent = new http.Agent({
             keepAlive: true,
-            maxSockets: 100,        // 每个主机最多 10 个连接
-            maxFreeSockets: 5,     // 最多保留 5 个空闲连接
-            timeout: 120000,        // 空闲连接 60 秒后关闭
+            keepAliveMsecs: 30000,  // keepAlive 探测间隔 30 秒
+            maxSockets: 100,        // 每个主机最多 100 个连接
+            maxFreeSockets: 5,      // 最多保留 5 个空闲连接
+            timeout: 60000,         // 空闲连接 60 秒后关闭（减少到 1 分钟）
+            scheduling: 'lifo'      // LIFO：优先使用最近的连接，减少失效连接复用
         });
         const httpsAgent = new https.Agent({
             keepAlive: true,
+            keepAliveMsecs: 30000,
             maxSockets: 100,
             maxFreeSockets: 5,
-            timeout: 120000,
+            timeout: 60000,
+            scheduling: 'lifo'
         });
+
+        // 保存 agent 引用，用于后续销毁
+        this.httpAgent = httpAgent;
+        this.httpsAgent = httpsAgent;
 
         // 构建随机化的 User-Agent
         const randomizedUserAgent = `aws-sdk-js/${uaComponents.sdkVersion} ua/2.1 os/${uaComponents.osType}#${uaComponents.winVersion} lang/js md/nodejs#${uaComponents.nodeVersion} api/codewhispererstreaming#${uaComponents.sdkVersion} m/N,E KiroIDE-${uaComponents.kiroVersion}-${macSha256}`;
@@ -506,6 +889,28 @@ export class KiroApiService {
         
         this.axiosInstance = axios.create(axiosConfig);
         this.isInitialized = true;
+    }
+
+    /**
+     * 重置连接池（用于处理 socket 错误）
+     * 销毁旧的 agent 并重新初始化
+     */
+    async resetConnectionPool() {
+        console.log('[Kiro] Resetting connection pool...');
+
+        // 销毁旧的 agent
+        if (this.httpAgent) {
+            this.httpAgent.destroy();
+        }
+        if (this.httpsAgent) {
+            this.httpsAgent.destroy();
+        }
+
+        // 重新初始化
+        this.isInitialized = false;
+        await this.initialize();
+
+        console.log('[Kiro] Connection pool reset completed');
     }
 
 // Helper to save credentials to a file (class method)
@@ -989,6 +1394,116 @@ async initializeAuth(forceRefresh = false) {
     }
 
     /**
+     * 反向映射 schema 参数名（Kiro → CC）
+     * 用于将 Kiro schema 的参数名转换回 Claude Code 期望的参数名
+     *
+     * @param {Object} schema - Kiro schema
+     * @param {Object} paramMap - 参数映射表（CC → Kiro）
+     * @returns {Object} - 反向映射后的 schema
+     */
+    reverseMapSchema(schema, paramMap) {
+        if (!schema || typeof schema !== 'object') {
+            return schema;
+        }
+
+        // 创建反向映射表（Kiro → CC）
+        const reverseMap = {};
+        for (const [ccParam, kiroParam] of Object.entries(paramMap)) {
+            reverseMap[kiroParam] = ccParam;
+        }
+
+        // 深拷贝 schema
+        const newSchema = { ...schema };
+
+        // 反向映射 properties 中的参数名
+        if (newSchema.properties && typeof newSchema.properties === 'object') {
+            const newProperties = {};
+            for (const [key, value] of Object.entries(newSchema.properties)) {
+                const newKey = reverseMap[key] || key;  // 如果有反向映射，使用 CC 参数名
+                newProperties[newKey] = value;
+            }
+            newSchema.properties = newProperties;
+        }
+
+        // 反向映射 required 数组中的参数名
+        if (Array.isArray(newSchema.required)) {
+            newSchema.required = newSchema.required.map(param => reverseMap[param] || param);
+        }
+
+        return newSchema;
+    }
+
+    /**
+     * 映射工具调用的参数名（Claude Code → Kiro）
+     * 用于处理 tool_use 时将 CC 的参数名转换为 Kiro 的参数名
+     *
+     * @param {string} toolName - 工具名称
+     * @param {Object} input - 原始输入参数
+     * @returns {Object} - 映射后的参数
+     */
+    mapToolUseParams(toolName, input) {
+        // 调试日志：特别追踪 Task 工具
+        if (toolName === 'Task') {
+            console.log(`[Kiro Task Debug] mapToolUseParams called with input:`, JSON.stringify(input));
+        }
+
+        if (!input || typeof input !== 'object') {
+            if (this.verboseLogging) {
+                console.log(`[Kiro ParamMap] ${toolName}: input is not object, skipping mapping`);
+            }
+            return input;
+        }
+
+        const mapping = CC_TO_KIRO_TOOL_MAPPING[toolName];
+        if (!mapping) {
+            if (this.verboseLogging) {
+                console.log(`[Kiro ParamMap] ${toolName}: no mapping found, using original input`);
+            }
+            return input;
+        }
+
+        // 调试日志：Task 工具的映射配置
+        if (toolName === 'Task') {
+            console.log(`[Kiro Task Debug] Found mapping:`, JSON.stringify(mapping));
+        }
+
+        const mappedInput = {};
+
+        // 应用参数映射
+        if (mapping.paramMap) {
+            for (const [ccParam, kiroParam] of Object.entries(mapping.paramMap)) {
+                if (input[ccParam] !== undefined) {
+                    mappedInput[kiroParam] = input[ccParam];
+                    if (this.verboseLogging || toolName === 'Task') {
+                        console.log(`[Kiro ParamMap] ${toolName}: mapped ${ccParam} → ${kiroParam} = ${JSON.stringify(input[ccParam])}`);
+                    }
+                }
+            }
+        }
+
+        // 添加未映射的参数（保持原样）
+        for (const [key, value] of Object.entries(input)) {
+            if (mappedInput[key] === undefined &&
+                (!mapping.paramMap || !mapping.paramMap[key])) {
+                mappedInput[key] = value;
+            }
+        }
+
+        // 添加固定参数
+        if (mapping.fixedParams) {
+            Object.assign(mappedInput, mapping.fixedParams);
+            if (this.verboseLogging) {
+                console.log(`[Kiro ParamMap] ${toolName}: added fixed params:`, mapping.fixedParams);
+            }
+        }
+
+        if (this.verboseLogging || toolName === 'Task') {
+            console.log(`[Kiro ParamMap] ${toolName}: final mapped input:`, JSON.stringify(mappedInput));
+        }
+        return mappedInput;
+    }
+
+    /**
      * Kiro 优化：工具格式转换（支持多种输入格式，统一输出 toolSpecification）
      * 参考 Kiro 源码 extension.js:707778
      * 支持 OpenAI、Anthropic、LangChain、Kiro 原生等多种工具格式
@@ -1016,7 +1531,9 @@ async initializeAuth(forceRefresh = false) {
             'type' in tool && 'name' in tool &&
             typeof tool.type === 'string' && typeof tool.name === 'string' &&
             builtinTools.includes(tool.name)) {
-            console.log(`[Kiro] Detected builtin tool: ${tool.name}, passing through without conversion`);
+            if (this.verboseLogging) {
+                console.log(`[Kiro] Detected builtin tool: ${tool.name}, passing through without conversion`);
+            }
             return tool;  // 内置工具原样传递
         }
 
@@ -1119,6 +1636,90 @@ async initializeAuth(forceRefresh = false) {
         // 无法识别的格式
         console.error('[Kiro] Invalid tool format:', tool);
         throw new Error('Invalid tool format. Supported: OpenAI, Anthropic, LangChain, Kiro native, or id+parameters/schema formats.');
+    }
+
+    /**
+     * Kiro 优化：使用映射表转换工具
+     * 优先使用 CC_TO_KIRO_TOOL_MAPPING 中的 Kiro 官方 schema
+     * 如果没有映射，则降级到原始的 convertToQTool
+     */
+    convertToQToolWithMapping(tool, compressInputSchema, maxDescLength) {
+        // 获取工具名（兼容多种格式）
+        let toolName = null;
+        let originalSchema = null;
+        let originalDesc = null;
+
+        if (tool.function?.name) {
+            toolName = tool.function.name;
+            originalSchema = tool.function.parameters;
+            originalDesc = tool.function.description;
+        } else if (tool.toolSpecification?.name) {
+            toolName = tool.toolSpecification.name;
+            originalSchema = tool.toolSpecification.inputSchema?.json;
+            originalDesc = tool.toolSpecification.description;
+        } else if (tool.name) {
+            toolName = tool.name;
+            originalSchema = tool.input_schema || tool.schema;
+            originalDesc = tool.description;
+        } else if (tool.id) {
+            toolName = tool.id;
+            originalSchema = tool.parameters || tool.schema;
+            originalDesc = tool.description;
+        }
+
+        // 检查是否有映射
+        const mapping = CC_TO_KIRO_TOOL_MAPPING[toolName];
+
+        if (mapping && mapping.kiroTool && KIRO_TOOL_SCHEMAS[mapping.kiroTool]) {
+            // 使用 Kiro 官方的简洁 schema
+            let kiroSchema = { ...KIRO_TOOL_SCHEMAS[mapping.kiroTool] };
+
+            // 调试日志：特别追踪 Task 工具
+            if (toolName === 'Task') {
+                console.log(`[Kiro Task Debug] Original Kiro schema:`, JSON.stringify(kiroSchema));
+                console.log(`[Kiro Task Debug] paramMap:`, JSON.stringify(mapping.paramMap));
+            }
+
+            // ⚠️ 关键修复：反向映射参数名（Kiro → CC）
+            // 因为 Claude Code 会根据 schema 调用工具，所以 schema 必须使用 CC 的参数名
+            if (mapping.paramMap) {
+                kiroSchema = this.reverseMapSchema(kiroSchema, mapping.paramMap);
+
+                // 调试日志：追踪反向映射结果
+                if (toolName === 'Task') {
+                    console.log(`[Kiro Task Debug] After reverseMapSchema:`, JSON.stringify(kiroSchema));
+                }
+            }
+
+            const desc = mapping.description || originalDesc || '';
+            const truncatedDesc = desc.length > maxDescLength
+                ? desc.substring(0, maxDescLength).trim() + '...'
+                : desc;
+
+            if (this.verboseLogging) {
+                console.log(`[Kiro] Mapped tool: ${toolName} → ${mapping.kiroTool}`);
+            }
+
+            // 调试日志：最终返回的 schema
+            if (toolName === 'Task') {
+                console.log(`[Kiro Task Debug] Final schema returned to client:`, JSON.stringify({
+                    name: toolName,
+                    description: truncatedDesc,
+                    inputSchema: { json: kiroSchema }
+                }));
+            }
+
+            return {
+                toolSpecification: {
+                    name: toolName,  // 保持原工具名，因为 CC 会用原名调用
+                    description: truncatedDesc,
+                    inputSchema: { json: kiroSchema }
+                }
+            };
+        }
+
+        // 没有映射，使用原始的 convertToQTool 逻辑
+        return this.convertToQTool(tool, compressInputSchema, maxDescLength);
     }
 
     /**
@@ -1246,6 +1847,51 @@ async initializeAuth(forceRefresh = false) {
             sanitizeActions.push(`removed ${beforeEmpty - result.length} empty messages`);
         }
 
+        // Step 2.5: 过滤格式错误/不完整的 assistant 消息内容
+        const beforeInvalid = result.length;
+        result = result.filter((message, index) => {
+            // 只检查 assistant 消息
+            if (message.role !== 'assistant') {
+                return true;
+            }
+
+            // 如果是数组内容，保留（可能包含 tool_use 等）
+            if (Array.isArray(message.content)) {
+                return true;
+            }
+
+            // 检查字符串内容
+            if (typeof message.content === 'string') {
+                const content = message.content.trim();
+
+                // 空内容已经在 Step 2 中过滤，这里再检查一次
+                if (content === '') {
+                    return false;
+                }
+
+                // 检查是否是不完整的 JSON（以 { 或 [ 开头但无法解析）
+                if ((content.startsWith('{') || content.startsWith('['))) {
+                    try {
+                        JSON.parse(content);
+                        // 能解析，说明是完整的 JSON，保留
+                        return true;
+                    } catch (e) {
+                        // 无法解析，说明是不完整的 JSON，过滤掉
+                        console.log(`[Kiro] Filtered invalid JSON content at message ${index}: ${content.substring(0, 50)}...`);
+                        return false;
+                    }
+                }
+
+                // 其他普通文本内容，保留
+                return true;
+            }
+
+            return true;
+        });
+        if (result.length < beforeInvalid) {
+            sanitizeActions.push(`removed ${beforeInvalid - result.length} invalid messages`);
+        }
+
         // Step 3: 重新排序工具结果（官方: reorderToolResultMessages）
         // 确保 tool_result 紧跟在对应的 tool_use 之后
         result = this._reorderToolResultMessages(result);
@@ -1303,7 +1949,7 @@ async initializeAuth(forceRefresh = false) {
         }
 
         // 只在有实际修改时输出一次汇总信息(减少日志噪音)
-        if (sanitizeActions.length > 0) {
+        if (sanitizeActions.length > 0 && this.verboseLogging) {
             console.log(`[Kiro] Message sanitization: ${sanitizeActions.join(', ')}`);
         }
 
@@ -1470,8 +2116,10 @@ async initializeAuth(forceRefresh = false) {
     }
 
     /**
-     * 使用 AI 进行智能摘要（异步方法）
+     * 使用 AI 进行智能摘要（异步方法）- 流式版本
      * 优先尝试 AI 摘要，失败后降级到传统裁剪
+     *
+     * 优化：使用流式请求复用现有连接，避免建立新连接的开销
      *
      * @param {Array} messages - 消息数组
      * @param {number} contextLength - 上下文长度限制
@@ -1527,44 +2175,58 @@ Organize the summary by TASKS/REQUESTS. For each distinct task:
 CONVERSATION DATA TO SUMMARIZE:
 ${conversationData}`;
 
-            // 使用 generateContent 生成摘要（使用简化的请求体）
+            // ✅ 优化：使用流式请求，复用现有连接
             const summaryRequestBody = {
                 messages: [{ role: 'user', content: summaryPrompt }],
                 system: null,
-                tools: null
+                tools: null  // 摘要请求不需要工具
             };
 
-            // ⚠️ 超时控制：30秒后自动降级到传统裁剪，防止摘要请求阻塞主请求
-            const SUMMARY_TIMEOUT_MS = 30000;
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Summary timeout after 30s')), SUMMARY_TIMEOUT_MS)
-            );
+            const summaryModel = SUMMARIZATION_CONFIG.SUMMARIZATION_MODEL || 'claude-sonnet-4-5-20250929';
 
-            console.log('[Kiro AI-Summary] Starting summarization with 30s timeout...');
-            const summaryResponse = await Promise.race([
-                this.generateContent(
-                    SUMMARIZATION_CONFIG.SUMMARIZATION_MODEL || 'claude-sonnet-4-5-20250929',
-                    summaryRequestBody
-                ),
-                timeoutPromise
-            ]);
+            // 超时控制：10秒后取消（流式请求通常更快）
+            const SUMMARY_TIMEOUT_MS = 10000;
+            let timeoutId;
+            let aborted = false;
 
-            // 从响应中提取摘要文本
-            let summary = null;
-            if (summaryResponse && summaryResponse.content) {
-                for (const block of summaryResponse.content) {
-                    if (block.type === 'text' && block.text) {
-                        summary = block.text;
-                        break;
+            console.log('[Kiro AI-Summary] Starting streaming summarization...');
+            const streamStartTime = Date.now();
+
+            const summaryPromise = (async () => {
+                const chunks = [];
+                try {
+                    for await (const event of this.streamApiReal('', summaryModel, summaryRequestBody)) {
+                        if (aborted) break;
+                        if (event.type === 'content' && event.content) {
+                            chunks.push(event.content);
+                        }
                     }
+                    return chunks.join('');
+                } catch (streamError) {
+                    if (!aborted) throw streamError;
+                    return null;
                 }
-            }
+            })();
+
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    aborted = true;
+                    reject(new Error('Summary timeout after 10s'));
+                }, SUMMARY_TIMEOUT_MS);
+            });
+
+            const summary = await Promise.race([summaryPromise, timeoutPromise]);
+            clearTimeout(timeoutId);
+
+            const streamDuration = Date.now() - streamStartTime;
+            console.log(`[Kiro AI-Summary] Streaming completed in ${streamDuration}ms`);
 
             if (summary) {
                 // 使用摘要 + 最近消息构建新的消息历史
                 const originalCount = messages.length;
                 const newMessages = buildMessagesWithSummary(summary, recentMessages, originalCount);
                 this._lastSummarizationTime = now;
+                console.log(`[Kiro AI-Summary] Success! Summary length: ${summary.length} chars`);
                 return newMessages;
             }
         } catch (error) {
@@ -1810,6 +2472,7 @@ ${conversationData}`;
      * @param {boolean} enableThinking - 是否启用思考模式（通过prompt injection实现）
      */
     async buildCodewhispererRequest(messages, model, tools = null, inSystemPrompt = null, enableThinking = false) {
+        const buildStartTime = Date.now();
         let systemPrompt = this.getContentText(inSystemPrompt);
 
         // 如果启用 thinking，在系统提示词中注入 thinking 指令
@@ -1822,7 +2485,12 @@ ${conversationData}`;
         }
 
         // Kiro 优化 1：消息验证和自动修复（确保消息交替）
+        const sanitizeStartTime = Date.now();
         messages = this.sanitizeMessages(messages);
+        const sanitizeDuration = Date.now() - sanitizeStartTime;
+        if (sanitizeDuration > 50) {
+            console.log(`[Kiro Perf] sanitizeMessages took ${sanitizeDuration}ms`);
+        }
 
         // Kiro 官方逻辑：使用MODEL_MAPPING映射到AWS支持的模型ID（提前定义，供后续使用）
         const codewhispererModel = MODEL_MAPPING[model] || MODEL_MAPPING[this.modelName];
@@ -1862,7 +2530,7 @@ ${conversationData}`;
             currentTokens += toolsTokens;
         }
 
-        // 如果超过 70% 阈值，触发消息修剪
+        // 如果超过 80% 阈值，触发消息修剪
         if (currentTokens > autoSummarizeThreshold) {
             console.log(`[Kiro Auto-Pruning] Token usage: ${currentTokens}/${contextLength} (${Math.round(currentTokens/contextLength*100)}%) - Triggering pruning`);
 
@@ -1872,7 +2540,10 @@ ${conversationData}`;
             reservedTokens += toolsTokens;  // 直接复用，不再重复计算
 
             // 执行修剪（优先使用 AI 摘要，失败则降级到传统裁剪）
+            const pruneStartTime = Date.now();
             messages = await this.pruneChatHistoryWithAI(messages, contextLength, reservedTokens);
+            const pruneDuration = Date.now() - pruneStartTime;
+            console.log(`[Kiro Perf] pruneChatHistoryWithAI took ${pruneDuration}ms`);
 
             // 修剪后重新计算 token 数
             const prunedTokens = messages.reduce((acc, message) => {
@@ -1928,7 +2599,9 @@ ${conversationData}`;
                         // 上一条是字符串,当前是数组,转换为数组格式
                         lastMsg.content = [{ type: 'text', text: lastMsg.content }, ...currentMsg.content];
                     }
-                    console.log(`[Kiro] Merged adjacent ${currentMsg.role} messages`);
+                    if (this.verboseLogging) {
+                        console.log(`[Kiro] Merged adjacent ${currentMsg.role} messages`);
+                    }
                 } else {
                     mergedMessages.push(currentMsg);
                 }
@@ -2005,7 +2678,9 @@ ${conversationData}`;
         //
         // 因此我们只做工具压缩（减少 description 长度），不做格式转换。
 
-        const DESCRIPTION_MAX_LENGTH = 1000;  // 从 200 提升到 1000，提高工具理解准确率
+        // ⚠️ 关键修复：限制工具总大小以避免 CONTENT_LENGTH_EXCEEDS_THRESHOLD 错误
+        const MAX_TOOL_COUNT = 25;  // 限制工具数量
+        const DESCRIPTION_MAX_LENGTH = 500;  // 工具描述最大长度（减少以降低请求体大小）
         let toolsContext = {};
 
         // ⚠️ 内置工具（builtin tools）定义 - 用于过滤
@@ -2019,22 +2694,87 @@ ${conversationData}`;
                    builtinToolNames.includes(tool.name);
         };
 
+        // 获取工具名（兼容多种格式）
+        const getToolName = (tool) => {
+            if (tool.function?.name) return tool.function.name;
+            if (tool.toolSpecification?.name) return tool.toolSpecification.name;
+            if (tool.name) return tool.name;
+            if (tool.id) return tool.id;
+            return null;
+        };
+
+        // 检查工具是否应该被移除（使用 CC_TO_KIRO_TOOL_MAPPING）
+        const shouldRemoveTool = (tool) => {
+            const name = getToolName(tool);
+            if (!name) return false;
+            const mapping = CC_TO_KIRO_TOOL_MAPPING[name];
+            if (mapping?.remove) {
+                if (this.verboseLogging) {
+                    console.log(`[Kiro] Removing unsupported tool: ${name} (${mapping.reason || 'not supported'})`);
+                }
+                return true;
+            }
+            return false;
+        };
+
         if (tools && Array.isArray(tools) && tools.length > 0) {
-            // 过滤掉内置工具，AWS CodeWhisperer 不支持这些
-            const nonBuiltinTools = tools.filter(tool => {
+            // 第一步：过滤掉内置工具（AWS CodeWhisperer 不支持）
+            let filteredTools = tools.filter(tool => {
                 const isBuiltin = isBuiltinTool(tool);
-                if (isBuiltin) {
+                if (isBuiltin && this.verboseLogging) {
                     console.log(`[Kiro] Filtering out builtin tool: ${tool.name} (not supported by AWS CodeWhisperer)`);
                 }
                 return !isBuiltin;
             });
 
-            // 转换所有工具为 toolSpecification 格式（压缩 description）
-            if (nonBuiltinTools.length > 0) {
-                toolsContext = {
-                    tools: nonBuiltinTools.map(tool => this.convertToQTool(tool, compressInputSchema, DESCRIPTION_MAX_LENGTH))
-                };
+            // 第二步：使用 CC_TO_KIRO_TOOL_MAPPING 过滤不支持的工具
+            filteredTools = filteredTools.filter(tool => !shouldRemoveTool(tool));
+
+            // 第三步：限制工具数量
+            if (filteredTools.length > MAX_TOOL_COUNT) {
+                console.warn(`[Kiro] ⚠️ Too many tools: ${filteredTools.length} > ${MAX_TOOL_COUNT}, keeping first ${MAX_TOOL_COUNT}`);
+                filteredTools = filteredTools.slice(0, MAX_TOOL_COUNT);
             }
+
+            // 转换所有工具为 toolSpecification 格式（使用映射表和压缩）
+            if (filteredTools.length > 0) {
+                toolsContext = {
+                    tools: filteredTools.map(tool => this.convertToQToolWithMapping(tool, compressInputSchema, DESCRIPTION_MAX_LENGTH))
+                };
+                if (this.verboseLogging) {
+                    console.log(`[Kiro] Processed ${filteredTools.length} tools (original: ${tools.length})`);
+                }            }
+        }
+
+        // ⚠️ 关键修复：收集保留的工具名称，用于过滤历史消息中的 tool_use 和 tool_result
+        const keptToolNames = new Set();
+        if (tools && Array.isArray(tools)) {
+            // 收集裁剪后保留的工具名称
+            const maxTools = Math.min(tools.length, MAX_TOOL_COUNT);
+            for (let i = 0; i < maxTools; i++) {
+                const tool = tools[i];
+                const name = tool.name || (tool.function && tool.function.name);
+                if (name) {
+                    keptToolNames.add(name);
+                }
+            }
+        }
+
+        // 建立 toolUseId → toolName 的映射，用于过滤 tool_result
+        const toolUseIdToName = new Map();
+        for (const message of processedMessages) {
+            if (message.role === 'assistant' && Array.isArray(message.content)) {
+                for (const part of message.content) {
+                    if (part.type === 'tool_use' && part.id && part.name) {
+                        toolUseIdToName.set(part.id, part.name);
+                    }
+                }
+            }
+        }
+
+        // 日志输出工具裁剪信息
+        if (tools && tools.length > MAX_TOOL_COUNT) {
+            console.log(`[Kiro] Tool trimming info: kept ${keptToolNames.size} tools, mapped ${toolUseIdToName.size} toolUseIds`);
         }
 
         const history = [];
@@ -2085,6 +2825,15 @@ ${conversationData}`;
                         if (part.type === 'text') {
                             userInputMessage.content += part.text;
                         } else if (part.type === 'tool_result') {
+                            // ⚠️ 关键修复：过滤掉引用被裁剪工具的 tool_result
+                            const toolName = toolUseIdToName.get(part.tool_use_id);
+                            if (keptToolNames.size > 0 && toolName && !keptToolNames.has(toolName)) {
+                                if (this.verboseLogging) {
+                                    console.log(`[Kiro] Filtering out tool_result for trimmed tool: ${toolName} (toolUseId: ${part.tool_use_id})`);
+                                }
+                                continue; // 跳过这个 tool_result
+                            }
+
                             // 官方 Kiro 优化：截断过长的工具输出，防止 400 错误
                             let toolContent = this.getContentText(part.content);
                             if (toolContent.length > KIRO_CONSTANTS.MAX_TOOL_OUTPUT_LENGTH) {
@@ -2136,7 +2885,12 @@ ${conversationData}`;
                     }
                     userInputMessage.userInputMessageContext = { toolResults: uniqueToolResults };
                 }
-                
+
+                // 修复：Kiro API 不接受空 content，当只有 toolResults 时添加默认文本
+                if (!userInputMessage.content || userInputMessage.content.trim() === '') {
+                    userInputMessage.content = toolResults.length > 0 ? 'Tool results provided.' : 'Continue';
+                }
+
                 history.push({ userInputMessage });
             } else if (message.role === 'assistant') {
                 let assistantResponseMessage = {
@@ -2149,8 +2903,18 @@ ${conversationData}`;
                         if (part.type === 'text') {
                             assistantResponseMessage.content += part.text;
                         } else if (part.type === 'tool_use') {
+                            // ⚠️ 关键修复：过滤掉被裁剪的工具
+                            if (keptToolNames.size > 0 && !keptToolNames.has(part.name)) {
+                                if (this.verboseLogging) {
+                                    console.log(`[Kiro] Filtering out tool_use for trimmed tool: ${part.name}`);
+                                }
+                                continue; // 跳过这个 tool_use
+                            }
+
+                            // 应用参数映射（CC → Kiro）
+                            const mappedInput = this.mapToolUseParams(part.name, part.input);
                             toolUses.push({
-                                input: part.input,
+                                input: mappedInput,
                                 name: part.name,
                                 toolUseId: part.id
                             });
@@ -2197,8 +2961,17 @@ ${conversationData}`;
                     if (part.type === 'text') {
                         assistantResponseMessage.content += part.text;
                     } else if (part.type === 'tool_use') {
+                        // ⚠️ 关键修复：过滤掉被裁剪的工具
+                        if (keptToolNames.size > 0 && !keptToolNames.has(part.name)) {
+                            if (this.verboseLogging) {
+                                console.log(`[Kiro] Filtering out tool_use for trimmed tool: ${part.name}`);
+                            }
+                            continue;
+                        }
+                        // 应用参数映射（CC → Kiro）
+                        const mappedInput = this.mapToolUseParams(part.name, part.input);
                         assistantResponseMessage.toolUses.push({
-                            input: part.input,
+                            input: mappedInput,
                             name: part.name,
                             toolUseId: part.id
                         });
@@ -2227,6 +3000,15 @@ ${conversationData}`;
                     if (part.type === 'text') {
                         currentContent += part.text;
                     } else if (part.type === 'tool_result') {
+                        // ⚠️ 关键修复：过滤掉引用被裁剪工具的 tool_result
+                        const toolName = toolUseIdToName.get(part.tool_use_id);
+                        if (keptToolNames.size > 0 && toolName && !keptToolNames.has(toolName)) {
+                            if (this.verboseLogging) {
+                                console.log(`[Kiro] Filtering out tool_result for trimmed tool: ${toolName} (toolUseId: ${part.tool_use_id})`);
+                            }
+                            continue;
+                        }
+
                         // 官方 Kiro 优化：截断过长的工具输出，防止 400 错误
                         let toolContent = this.getContentText(part.content);
                         if (toolContent.length > KIRO_CONSTANTS.MAX_TOOL_OUTPUT_LENGTH) {
@@ -2240,8 +3022,17 @@ ${conversationData}`;
                             toolUseId: part.tool_use_id
                         });
                     } else if (part.type === 'tool_use') {
+                        // ⚠️ 关键修复：过滤掉被裁剪的工具
+                        if (keptToolNames.size > 0 && !keptToolNames.has(part.name)) {
+                            if (this.verboseLogging) {
+                                console.log(`[Kiro] Filtering out tool_use for trimmed tool: ${part.name}`);
+                            }
+                            continue;
+                        }
+                        // 应用参数映射（CC → Kiro）
+                        const mappedInput = this.mapToolUseParams(part.name, part.input);
                         currentToolUses.push({
-                            input: part.input,
+                            input: mappedInput,
                             name: part.name,
                             toolUseId: part.id
                         });
@@ -2469,6 +3260,7 @@ ${conversationData}`;
      * 调用 API 并处理错误重试
      */
     async callApi(method, model, body, isRetry = false, retryCount = 0) {
+        const callStartTime = Date.now();
         if (!this.isInitialized) await this.initialize();
         const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000; // 1 second base delay
@@ -2477,9 +3269,47 @@ ${conversationData}`;
         const enableThinking = body.thinking?.type === 'enabled' ||
                              body.extended_thinking === true ||
                              this.config.ENABLE_THINKING_BY_DEFAULT === true;
-        const requestData = await this.buildCodewhispererRequest(body.messages, model, body.tools, body.system, enableThinking);
 
-        // 性能优化：移除 JSON.stringify 大小检查，该操作对大请求很慢
+        // 🔍 性能诊断：记录请求构建时间
+        const buildStartTime = Date.now();
+        const requestData = await this.buildCodewhispererRequest(body.messages, model, body.tools, body.system, enableThinking);
+        const buildDuration = Date.now() - buildStartTime;
+        if (buildDuration > 100) {
+            console.log(`[Kiro Perf] buildCodewhispererRequest took ${buildDuration}ms (messages: ${body.messages?.length || 0})`);
+        }
+
+        // ========================================
+        // 📤 请求日志
+        // ========================================
+        const requestStartTime = Date.now();
+        const requestJson = JSON.stringify(requestData);
+        const requestSizeKB = (requestJson.length / 1024).toFixed(2);
+        const conversationState = requestData?.conversationState;
+
+        // 提取当前消息内容预览
+        const currentContent = conversationState?.currentMessage?.userInputMessage?.content || '';
+        const contentPreview = currentContent.length > 60
+            ? currentContent.substring(0, 60) + '...'
+            : currentContent;
+
+        // 简洁模式：只显示关键信息
+        if (!this.verboseLogging) {
+            console.log(`[Kiro] 📤 REQUEST [${model}] - ${new Date().toISOString()}`);
+        } else {
+            // 详细模式：显示所有信息
+            console.log('\n' + '='.repeat(60));
+            console.log(`📤 REQUEST [${model}]${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+            console.log('='.repeat(60));
+            console.log(`Timestamp: ${new Date().toISOString()}`);
+            console.log(`URL: ${model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl}`);
+            console.log(`Messages: ${(conversationState?.history?.length || 0) + 1} | Tools: ${conversationState?.currentMessage?.userInputMessage?.userInputMessageContext?.tools?.length || 0} | System: ${body.system ? 'yes' : 'no'}`);
+            console.log(`Request Size: ${requestSizeKB} KB | Thinking: ${enableThinking ? 'enabled' : 'disabled'}`);
+            if (conversationState?.conversationId) {
+                console.log(`Conversation ID: ${conversationState.conversationId}`);
+            }
+            console.log(`Message Preview: ${contentPreview}`);
+            console.log('='.repeat(60));
+        }
 
         try {
             const token = this.accessToken; // Use the already initialized token
@@ -2491,8 +3321,57 @@ ${conversationData}`;
             // 当 model 以 kiro-amazonq 开头时，使用 amazonQUrl，否则使用 baseUrl
             const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
             const response = await this.axiosInstance.post(requestUrl, requestData, { headers });
+
+            // ========================================
+            // 📥 响应日志
+            // ========================================
+            const requestDuration = ((Date.now() - requestStartTime) / 1000).toFixed(2);
+            const responseSize = response.data ? Buffer.byteLength(JSON.stringify(response.data)) : 0;
+            const responseSizeKB = (responseSize / 1024).toFixed(2);
+
+            // 简洁模式：只显示关键信息
+            if (!this.verboseLogging) {
+                console.log(`[Kiro] 📥 RESPONSE [${response.status}] [${requestDuration}s]`);
+            } else {
+                // 详细模式：显示所有信息
+                console.log('\n' + '='.repeat(60));
+                console.log(`📥 RESPONSE [${response.status} ${response.statusText}] [${requestDuration}s]`);
+                console.log('='.repeat(60));
+                console.log(`Response Size: ${responseSizeKB} KB`);
+                console.log('='.repeat(60) + '\n');
+            }
+
             return response;
         } catch (error) {
+            // ⚠️ Socket 错误处理（UND_ERR_SOCKET, ECONNRESET 等）
+            // 这些错误通常是连接池中的连接失效导致的
+            const isSocketError = !error.response && (
+                error.code === 'ECONNRESET' ||
+                error.code === 'ETIMEDOUT' ||
+                error.code === 'ENOTFOUND' ||
+                error.code === 'UND_ERR_SOCKET' ||
+                error.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+                error.message?.includes('socket') ||
+                error.message?.includes('ECONNRESET')
+            );
+
+            if (isSocketError && retryCount < maxRetries) {
+                console.log(`[Kiro] Socket error detected: ${error.code || error.message}`);
+                console.log(`[Kiro] Resetting connection pool and retrying... (attempt ${retryCount + 1}/${maxRetries})`);
+
+                // 重置连接池
+                await this.resetConnectionPool();
+
+                // 短暂延迟后重试
+                const delay = 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+
+                return this.callApi(method, model, body, isRetry, retryCount + 1);
+            } else if (isSocketError) {
+                console.error('[Kiro] Socket error after max retries:', error.code || error.message);
+                throw new Error(`Connection failed: ${error.message}. Please check your network or try restarting the service.`);
+            }
+
             // 403 错误处理
             if (error.response?.status === 403 && !isRetry) {
                 console.log('[Kiro] Received 403. Attempting token refresh and retrying...');
@@ -2628,7 +3507,9 @@ ${conversationData}`;
 
         // Kiro 官方逻辑：如果model在MODEL_MAPPING中则使用，否则使用默认模型
         const finalModel = MODEL_MAPPING[model] ? model : this.modelName;
-        console.log(`[Kiro] Calling generateContent with model: ${finalModel}`);
+        if (this.verboseLogging) {
+            console.log(`[Kiro] Calling generateContent with model: ${finalModel}`);
+        }
         
         // Estimate input tokens before making the API call
         const inputTokens = this.estimateInputTokens(requestBody);
@@ -3007,6 +3888,7 @@ ${conversationData}`;
      * 性能优化：避免每次循环都 Buffer.concat，改用累积后一次性合并
      */
     async * streamApiReal(method, model, body, isRetry = false, retryCount = 0) {
+        const callStartTime = Date.now();
         if (!this.isInitialized) await this.initialize();
         const maxRetries = this.config.REQUEST_MAX_RETRIES || 3;
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;
@@ -3015,7 +3897,47 @@ ${conversationData}`;
         const enableThinking = body.thinking?.type === 'enabled' ||
                              body.extended_thinking === true ||
                              this.config.ENABLE_THINKING_BY_DEFAULT === true;
+
+        // 🔍 性能诊断：记录请求构建时间
+        const buildStartTime = Date.now();
         const requestData = await this.buildCodewhispererRequest(body.messages, model, body.tools, body.system, enableThinking);
+        const buildDuration = Date.now() - buildStartTime;
+        if (buildDuration > 100) {
+            console.log(`[Kiro Perf] streamApiReal buildCodewhispererRequest took ${buildDuration}ms (messages: ${body.messages?.length || 0})`);
+        }
+
+        // ========================================
+        // 📤 流式请求日志
+        // ========================================
+        const requestStartTime = Date.now();
+        const requestJson = JSON.stringify(requestData);
+        const requestSizeKB = (requestJson.length / 1024).toFixed(2);
+        const conversationState = requestData?.conversationState;
+
+        // 提取当前消息内容预览
+        const currentContent = conversationState?.currentMessage?.userInputMessage?.content || '';
+        const contentPreview = currentContent.length > 60
+            ? currentContent.substring(0, 60) + '...'
+            : currentContent;
+
+        // 简洁模式：只显示关键信息
+        if (!this.verboseLogging) {
+            console.log(`[Kiro] 📤 STREAM [${model}] - ${new Date().toISOString()}`);
+        } else {
+            // 详细模式：显示所有信息
+            console.log('\n' + '='.repeat(60));
+            console.log(`📤 STREAM REQUEST [${model}]${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+            console.log('='.repeat(60));
+            console.log(`Timestamp: ${new Date().toISOString()}`);
+            console.log(`URL: ${model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl}`);
+            console.log(`Messages: ${(conversationState?.history?.length || 0) + 1} | Tools: ${conversationState?.currentMessage?.userInputMessage?.userInputMessageContext?.tools?.length || 0} | System: ${body.system ? 'yes' : 'no'}`);
+            console.log(`Request Size: ${requestSizeKB} KB | Thinking: ${enableThinking ? 'enabled' : 'disabled'}`);
+            if (conversationState?.conversationId) {
+                console.log(`Conversation ID: ${conversationState.conversationId}`);
+            }
+            console.log(`Message Preview: ${contentPreview}`);
+            console.log('='.repeat(60));
+        }
 
         const token = this.accessToken;
         const headers = {
@@ -3026,6 +3948,9 @@ ${conversationData}`;
         const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
 
         let stream = null;
+        let eventCount = 0;  // 统计流式事件数量
+        let totalBytesReceived = 0;  // 统计接收的字节数
+
         try {
             const response = await this.axiosInstance.post(requestUrl, requestData, {
                 headers,
@@ -3039,6 +3964,8 @@ ${conversationData}`;
             let lastContentEvent = null;  // 用于检测连续重复的 content 事件
 
             for await (const chunk of stream) {
+                totalBytesReceived += chunk.length;
+
                 // 高效合并：只合并 pending + 新 chunk，而不是所有历史 chunk
                 pendingBuffer = pendingBuffer.length > 0
                     ? Buffer.concat([pendingBuffer, chunk])
@@ -3052,6 +3979,7 @@ ${conversationData}`;
 
                 // yield 所有事件，但过滤连续完全相同的 content 事件（Kiro API 有时会重复发送）
                 for (const event of events) {
+                    eventCount++;
                     if (event.type === 'content' && event.data) {
                         // 检查是否与上一个 content 事件完全相同
                         if (lastContentEvent === event.data) {
@@ -3078,19 +4006,65 @@ ${conversationData}`;
                     }
                 }
             }
+
+            // ========================================
+            // 📥 流式响应日志
+            // ========================================
+            const requestDuration = ((Date.now() - requestStartTime) / 1000).toFixed(2);
+            const totalSizeKB = (totalBytesReceived / 1024).toFixed(2);
+
+            // 简洁模式：只显示关键信息
+            if (!this.verboseLogging) {
+                console.log(`[Kiro] 📥 STREAM [Complete] [${requestDuration}s]`);
+            } else {
+                // 详细模式：显示所有信息
+                console.log('\n' + '='.repeat(60));
+                console.log(`📥 STREAM RESPONSE [Complete] [${requestDuration}s]`);
+                console.log('='.repeat(60));
+                console.log(`Total Events: ${eventCount} | Total Size: ${totalSizeKB} KB`);
+                console.log('='.repeat(60) + '\n');
+            }
         } catch (error) {
             // 确保出错时关闭流
             if (stream && typeof stream.destroy === 'function') {
                 stream.destroy();
             }
-            
+
+            // ⚠️ Socket 错误处理（流式 API）
+            const isSocketError = !error.response && (
+                error.code === 'ECONNRESET' ||
+                error.code === 'ETIMEDOUT' ||
+                error.code === 'ENOTFOUND' ||
+                error.code === 'UND_ERR_SOCKET' ||
+                error.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+                error.message?.includes('socket') ||
+                error.message?.includes('ECONNRESET')
+            );
+
+            if (isSocketError && retryCount < maxRetries) {
+                console.log(`[Kiro Stream] Socket error detected: ${error.code || error.message}`);
+                console.log(`[Kiro Stream] Resetting connection pool and retrying... (attempt ${retryCount + 1}/${maxRetries})`);
+
+                // 重置连接池
+                await this.resetConnectionPool();
+
+                // 短暂延迟后重试
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                yield* this.streamApiReal(method, model, body, isRetry, retryCount + 1);
+                return;
+            } else if (isSocketError) {
+                console.error('[Kiro Stream] Socket error after max retries:', error.code || error.message);
+                throw new Error(`Stream connection failed: ${error.message}. Please check your network or try restarting the service.`);
+            }
+
             if (error.response?.status === 403 && !isRetry) {
                 console.log('[Kiro] Received 403 in stream. Attempting token refresh and retrying...');
                 await this.initializeAuth(true);
                 yield* this.streamApiReal(method, model, body, true, retryCount);
                 return;
             }
-            
+
             if (error.response?.status === 429 && retryCount < maxRetries) {
                 const delay = baseDelay * Math.pow(2, retryCount);
                 console.log(`[Kiro] Received 429 in stream. Retrying in ${delay}ms...`);
@@ -3133,7 +4107,9 @@ ${conversationData}`;
         const enableThinking = requestBody.thinking?.type === 'enabled' ||
                              requestBody.extended_thinking === true ||
                              this.config.ENABLE_THINKING_BY_DEFAULT === true;
-        console.log(`[Kiro] Calling generateContentStream with model: ${finalModel} (real streaming, thinking: ${enableThinking})`);
+        if (this.verboseLogging) {
+            console.log(`[Kiro] Calling generateContentStream with model: ${finalModel} (real streaming, thinking: ${enableThinking})`);
+        }
 
         const inputTokens = this.estimateInputTokens(requestBody);
         const messageId = `${uuidv4()}`;
@@ -3390,6 +4366,15 @@ ${conversationData}`;
                             } catch (e) {
                                 // JSON 解析失败，保留原始字符串
                             }
+
+                            // ⭐ 服务端执行 webSearch 工具
+                            if (currentToolCall.name === 'webSearch') {
+                                if (this.verboseLogging) {
+                                    console.log('[Kiro WebSearch] Detected webSearch tool call, executing on server...');
+                                }
+                                currentToolCall.serverSideExecute = true;  // 标记为服务端执行
+                            }
+
                             toolCalls.push(currentToolCall);
                             currentToolCall = null;
                         }
@@ -3408,7 +4393,9 @@ ${conversationData}`;
                     const references = event.data.references;
                     if (references && references.length > 0) {
                         codeReferences.push(...references);
-                        console.log(`[Kiro] Code references detected: ${references.length} sources`);
+                        if (this.verboseLogging) {
+                            console.log(`[Kiro] Code references detected: ${references.length} sources`);
+                        }
                     }
                 }
             }
@@ -3484,15 +4471,65 @@ ${conversationData}`;
                 yield { type: "content_block_stop", index: textBlockIndex };
             }
 
-            // 5. 处理工具调用（如果有）
-            if (toolCalls.length > 0) {
-                // 计算起始索引：thinking块(0或无) + text块(0或1)
+            // ⭐ 4.5. 处理服务端执行的工具（webSearch）
+            // 如果有 webSearch 工具调用，执行搜索并将结果作为额外内容返回
+            const serverSideTools = toolCalls.filter(tc => tc.serverSideExecute);
+            const clientSideTools = toolCalls.filter(tc => !tc.serverSideExecute);
+
+            if (serverSideTools.length > 0) {
+                if (this.verboseLogging) {
+                    console.log(`[Kiro WebSearch] Processing ${serverSideTools.length} server-side tool calls...`);
+                }
+
+                let searchResultsContent = '';
+                for (const tc of serverSideTools) {
+                    if (tc.name === 'webSearch') {
+                        const query = tc.input?.query || tc.input;
+                        if (query) {
+                            // 执行搜索
+                            const searchResult = await executeWebSearch(query, this.verboseLogging);
+                            const searchResultText = formatSearchResults(searchResult);
+                            searchResultsContent += `\n\n---\n**Web Search Results for "${query}":**\n${searchResultText}`;
+                        }
+                    }
+                }
+
+                // 如果有搜索结果，发送为额外的文本内容
+                if (searchResultsContent) {
+                    const searchBlockIndex = (thinkingContent ? 1 : 0) + (textBlockStarted ? 1 : 0);
+
+                    // 发送搜索结果文本块
+                    yield {
+                        type: "content_block_start",
+                        index: searchBlockIndex,
+                        content_block: { type: "text", text: "" }
+                    };
+
+                    yield {
+                        type: "content_block_delta",
+                        index: searchBlockIndex,
+                        delta: { type: "text_delta", text: searchResultsContent }
+                    };
+
+                    yield { type: "content_block_stop", index: searchBlockIndex };
+
+                    totalContent += searchResultsContent;
+                    if (this.verboseLogging) {
+                        console.log('[Kiro WebSearch] Search results added to response');
+                    }
+                }
+            }
+
+            // 5. 处理工具调用（如果有，只处理客户端执行的工具）
+            if (clientSideTools.length > 0) {
+                // 计算起始索引：thinking块(0或无) + text块(0或1) + 搜索结果块(如果有)
                 let startIndex = 0;
                 if (thinkingContent) startIndex++;  // thinking块占用index 0
                 if (textBlockStarted) startIndex++;  // text块占用下一个index
+                if (serverSideTools.length > 0) startIndex++;  // 搜索结果块
 
-                for (let i = 0; i < toolCalls.length; i++) {
-                    const tc = toolCalls[i];
+                for (let i = 0; i < clientSideTools.length; i++) {
+                    const tc = clientSideTools[i];
                     const blockIndex = startIndex + i;
 
                     yield {
@@ -3542,13 +4579,13 @@ ${conversationData}`;
             if (thinkingContent) {
                 outputTokens += this.countTextTokens(thinkingContent);
             }
-            for (const tc of toolCalls) {
+            for (const tc of clientSideTools) {
                 outputTokens += this.countTextTokens(JSON.stringify(tc.input || {}));
             }
 
             yield {
                 type: "message_delta",
-                delta: { stop_reason: toolCalls.length > 0 ? "tool_use" : "end_turn" },
+                delta: { stop_reason: clientSideTools.length > 0 ? "tool_use" : "end_turn" },
                 usage: { output_tokens: outputTokens }
             };
 
@@ -3845,7 +4882,9 @@ ${conversationData}`;
             const currentTime = new Date();
             const cronNearMinutesInMillis = (this.config.CRON_NEAR_MINUTES || 10) * 60 * 1000;
             const thresholdTime = new Date(currentTime.getTime() + cronNearMinutesInMillis);
-            console.log(`[Kiro] Expiry date: ${expirationTime.getTime()}, Current time: ${currentTime.getTime()}, ${this.config.CRON_NEAR_MINUTES || 10} minutes from now: ${thresholdTime.getTime()}`);
+            if (this.verboseLogging) {
+                console.log(`[Kiro] Expiry date: ${expirationTime.getTime()}, Current time: ${currentTime.getTime()}, ${this.config.CRON_NEAR_MINUTES || 10} minutes from now: ${thresholdTime.getTime()}`);
+            }
             return expirationTime.getTime() <= thresholdTime.getTime();
         } catch (error) {
             console.error(`[Kiro] Error checking expiry date: ${this.expiresAt}, Error: ${error.message}`);
