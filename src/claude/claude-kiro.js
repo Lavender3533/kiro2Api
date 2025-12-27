@@ -247,14 +247,15 @@ const CC_TO_KIRO_TOOL_MAPPING = {
 };
 
 // Kiro 官方工具的简洁 Schema（从 extension.js 提取）
+// 注意：只保留 CC 也支持的参数，避免 CC 验证失败
 const KIRO_TOOL_SCHEMAS = {
     readFile: {
         type: 'object',
         properties: {
             path: { type: 'string', description: 'Path to file to read' },
             start_line: { type: 'number', description: 'Starting line number (optional)' },
-            end_line: { type: 'number', description: 'Ending line number (optional)' },
-            explanation: { type: 'string', description: 'Why this tool is being used' }
+            end_line: { type: 'number', description: 'Ending line number (optional)' }
+            // 移除 explanation - CC 不支持
         },
         required: ['path']
     },
@@ -279,20 +280,16 @@ const KIRO_TOOL_SCHEMAS = {
         type: 'object',
         properties: {
             query: { type: 'string', description: 'The regex pattern to search for' },
-            caseSensitive: { type: 'boolean', description: 'Whether the search should be case sensitive' },
-            excludePattern: { type: 'string', description: 'Glob pattern for files to exclude' },
-            explanation: { type: 'string', description: 'Why this tool is being used' },
             includePattern: { type: 'string', description: 'Glob pattern for files to include' }
+            // 移除 caseSensitive, excludePattern, explanation - CC 用不同的参数名
         },
         required: ['query']
     },
     fileSearch: {
         type: 'object',
         properties: {
-            query: { type: 'string', description: 'The regex pattern to search for' },
-            explanation: { type: 'string', description: 'Fuzzy filename to search for' },
-            excludePattern: { type: 'string', description: 'Glob pattern for files to exclude' },
-            includeIgnoredFiles: { type: 'string', description: 'Whether to include .gitignore files (yes/no)' }
+            query: { type: 'string', description: 'The glob pattern to search for' }
+            // 移除 explanation, excludePattern, includeIgnoredFiles - CC 不支持
         },
         required: ['query']
     },
@@ -300,18 +297,16 @@ const KIRO_TOOL_SCHEMAS = {
         type: 'object',
         properties: {
             command: { type: 'string', description: 'Shell command to execute' },
-            path: { type: 'string', description: 'Path for current working directory' },
-            ignoreWarning: { type: 'boolean', description: 'Set to true to bypass long-running command warnings' },
             timeout: { type: 'number', description: 'Command timeout in milliseconds' }
+            // 移除 path, ignoreWarning - CC 不支持
         },
         required: ['command']
     },
     listDirectory: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'Path to directory' },
-            explanation: { type: 'string', description: 'Why this tool is being used' },
-            depth: { type: 'number', description: 'Depth of a recursive directory listing' }
+            path: { type: 'string', description: 'Path to directory' }
+            // 移除 explanation, depth - CC 不支持
         },
         required: ['path']
     },
@@ -319,8 +314,8 @@ const KIRO_TOOL_SCHEMAS = {
         type: 'object',
         properties: {
             question: { type: 'string', description: 'The question to ask the user' },
-            options: { type: 'array', items: { type: 'string' }, description: 'Predefined choices for the user' },
-            reason: { type: 'string', description: 'The reason the user is being asked for input' }
+            options: { type: 'array', items: { type: 'string' }, description: 'Predefined choices for the user' }
+            // 移除 reason - CC 不支持
         },
         required: ['question']
     },
@@ -336,14 +331,14 @@ const KIRO_TOOL_SCHEMAS = {
         properties: {
             action: { type: 'string', enum: ['start', 'stop', 'restart'] },
             command: { type: 'string' },
-            processId: { type: 'string' }  // CC uses string task IDs like "b87d8a9"
+            processId: { type: 'string' }
         },
         required: ['action']
     },
     getProcessOutput: {
         type: 'object',
         properties: {
-            processId: { type: 'string' },  // CC uses string task IDs like "b87d8a9"
+            processId: { type: 'string' },
             lines: { type: 'number' }
         },
         required: ['processId']
@@ -355,7 +350,7 @@ const KIRO_TOOL_SCHEMAS = {
             prompt: { type: 'string', description: 'The instruction or question for the agent' },
             explanation: { type: 'string', description: 'One or two sentences explaining why this tool is being used' }
         },
-        required: ['name', 'prompt']
+        required: ['name', 'prompt', 'explanation']
     },
     // ===== 服务端模拟工具 =====
     webSearch: {
@@ -1504,6 +1499,60 @@ async initializeAuth(forceRefresh = false) {
     }
 
     /**
+     * 反向映射工具调用的参数名（Kiro → Claude Code）
+     * 用于将 Kiro 返回的 tool_use 参数转换回 CC 期望的格式
+     *
+     * @param {string} toolName - 工具名称（CC 格式）
+     * @param {Object} input - Kiro 返回的参数
+     * @returns {Object} - 反向映射后的参数（CC 格式）
+     */
+    reverseMapToolInput(toolName, input) {
+        if (!input || typeof input !== 'object') {
+            return input;
+        }
+
+        const mapping = CC_TO_KIRO_TOOL_MAPPING[toolName];
+        if (!mapping || !mapping.paramMap) {
+            return input;
+        }
+
+        // 创建反向映射表（Kiro → CC）
+        const reverseMap = {};
+        for (const [ccParam, kiroParam] of Object.entries(mapping.paramMap)) {
+            reverseMap[kiroParam] = ccParam;
+        }
+
+        // Kiro 特有参数列表（这些参数在 Kiro 工具中存在，但 CC 工具中没有）
+        const kiroOnlyParams = ['explanation', 'ignoreWarning', 'depth', 'reason',
+                                'caseSensitive', 'excludePattern', 'includeIgnoredFiles'];
+
+        const reversedInput = {};
+
+        for (const [key, value] of Object.entries(input)) {
+            if (reverseMap[key]) {
+                // 有反向映射：使用 CC 参数名
+                reversedInput[reverseMap[key]] = value;
+                if (this.verboseLogging) {
+                    console.log(`[Kiro ReverseMap] ${toolName}: reversed ${key} → ${reverseMap[key]}`);
+                }
+            } else if (kiroOnlyParams.includes(key)) {
+                // Kiro 特有参数：跳过
+                if (this.verboseLogging) {
+                    console.log(`[Kiro ReverseMap] ${toolName}: filtered out Kiro-only param: ${key}`);
+                }
+            } else {
+                // 其他参数：保留（可能是 CC 和 Kiro 共有的参数，或者是新的参数）
+                reversedInput[key] = value;
+            }
+        }
+
+        if (this.verboseLogging) {
+            console.log(`[Kiro ReverseMap] ${toolName}: reversed input:`, JSON.stringify(reversedInput));
+        }
+        return reversedInput;
+    }
+
+    /**
      * Kiro 优化：工具格式转换（支持多种输入格式，统一输出 toolSpecification）
      * 参考 Kiro 源码 extension.js:707778
      * 支持 OpenAI、Anthropic、LangChain、Kiro 原生等多种工具格式
@@ -1670,26 +1719,14 @@ async initializeAuth(forceRefresh = false) {
         // 检查是否有映射
         const mapping = CC_TO_KIRO_TOOL_MAPPING[toolName];
 
-        if (mapping && mapping.kiroTool && KIRO_TOOL_SCHEMAS[mapping.kiroTool]) {
-            // 使用 Kiro 官方的简洁 schema
-            let kiroSchema = { ...KIRO_TOOL_SCHEMAS[mapping.kiroTool] };
+        if (mapping && mapping.kiroTool) {
+            // ⚠️ 关键修复：使用 CC 原始的 schema，不要用 Kiro 的 schema
+            // 因为 CC 会根据返回的 schema 验证参数，如果使用 Kiro schema，
+            // CC 会收到它不认识的参数（如 explanation, path），导致验证失败
+            // 参数映射只在 mapToolUseParams 中进行（发送给 Kiro 时）
 
-            // 调试日志：特别追踪 Task 工具
-            if (toolName === 'Task') {
-                console.log(`[Kiro Task Debug] Original Kiro schema:`, JSON.stringify(kiroSchema));
-                console.log(`[Kiro Task Debug] paramMap:`, JSON.stringify(mapping.paramMap));
-            }
-
-            // ⚠️ 关键修复：反向映射参数名（Kiro → CC）
-            // 因为 Claude Code 会根据 schema 调用工具，所以 schema 必须使用 CC 的参数名
-            if (mapping.paramMap) {
-                kiroSchema = this.reverseMapSchema(kiroSchema, mapping.paramMap);
-
-                // 调试日志：追踪反向映射结果
-                if (toolName === 'Task') {
-                    console.log(`[Kiro Task Debug] After reverseMapSchema:`, JSON.stringify(kiroSchema));
-                }
-            }
+            // 压缩原始 schema
+            const compressedSchema = originalSchema ? compressInputSchema(originalSchema) : { type: 'object', properties: {} };
 
             const desc = mapping.description || originalDesc || '';
             const truncatedDesc = desc.length > maxDescLength
@@ -1697,23 +1734,14 @@ async initializeAuth(forceRefresh = false) {
                 : desc;
 
             if (this.verboseLogging) {
-                console.log(`[Kiro] Mapped tool: ${toolName} → ${mapping.kiroTool}`);
-            }
-
-            // 调试日志：最终返回的 schema
-            if (toolName === 'Task') {
-                console.log(`[Kiro Task Debug] Final schema returned to client:`, JSON.stringify({
-                    name: toolName,
-                    description: truncatedDesc,
-                    inputSchema: { json: kiroSchema }
-                }));
+                console.log(`[Kiro] Mapped tool: ${toolName} → ${mapping.kiroTool} (keeping original CC schema)`);
             }
 
             return {
                 toolSpecification: {
                     name: toolName,  // 保持原工具名，因为 CC 会用原名调用
                     description: truncatedDesc,
-                    inputSchema: { json: kiroSchema }
+                    inputSchema: { json: compressedSchema }
                 }
             };
         }
@@ -4543,8 +4571,19 @@ ${conversationData}`;
                         }
                     };
 
-                    // 官方Kiro做法：直接stringify，不做额外验证
-                    const inputJson = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input || {});
+                    // ⚠️ 关键：反向映射参数名（Kiro → CC）
+                    // Kiro 返回的参数使用 Kiro 的参数名（如 path, explanation）
+                    // 需要转换回 CC 的参数名（如 file_path）并过滤 CC 不支持的参数
+                    let toolInput = tc.input || {};
+                    if (typeof toolInput === 'string') {
+                        try {
+                            toolInput = JSON.parse(toolInput);
+                        } catch (e) {
+                            toolInput = { raw: toolInput };
+                        }
+                    }
+                    const reversedInput = this.reverseMapToolInput(tc.name, toolInput);
+                    const inputJson = JSON.stringify(reversedInput);
 
                     yield {
                         type: "content_block_delta",
@@ -4755,12 +4794,21 @@ ${conversationData}`;
                     try {
                         // Arguments should be a stringified JSON object.
                         inputObject = tc.function.arguments;
+                        // 如果是字符串，先解析
+                        if (typeof inputObject === 'string') {
+                            inputObject = JSON.parse(inputObject);
+                        }
                     } catch (e) {
                         console.warn(`[Kiro] Invalid JSON for tool call arguments. Wrapping in raw_arguments. Error: ${e.message}`, tc.function.arguments);
                         // If parsing fails, wrap the raw string in an object as a fallback,
                         // since Claude's `input` field expects an object.
                         inputObject = { "raw_arguments": tc.function.arguments };
                     }
+
+                    // ⚠️ 关键：反向映射参数名（Kiro → CC）
+                    const reversedInput = this.reverseMapToolInput(tc.function.name, inputObject);
+                    const inputJson = JSON.stringify(reversedInput);
+
                     // 2. content_block_start for each tool_use
                     events.push({
                         type: "content_block_start",
@@ -4772,7 +4820,7 @@ ${conversationData}`;
                             input: {} // input is streamed via input_json_delta
                         }
                     });
-                    
+
                     // 3. content_block_delta for each tool_use
                     // Since Kiro is not truly streaming, we send the full arguments as one delta.
                     events.push({
@@ -4780,7 +4828,7 @@ ${conversationData}`;
                         index: index,
                         delta: {
                             type: "input_json_delta",
-                            partial_json: inputObject
+                            partial_json: inputJson
                         }
                     });
  
@@ -4822,19 +4870,27 @@ ${conversationData}`;
                     try {
                         // Arguments should be a stringified JSON object.
                         inputObject = tc.function.arguments;
+                        // 如果是字符串，先解析
+                        if (typeof inputObject === 'string') {
+                            inputObject = JSON.parse(inputObject);
+                        }
                     } catch (e) {
                         console.warn(`[Kiro] Invalid JSON for tool call arguments. Wrapping in raw_arguments. Error: ${e.message}`, tc.function.arguments);
                         // If parsing fails, wrap the raw string in an object as a fallback,
                         // since Claude's `input` field expects an object.
                         inputObject = { "raw_arguments": tc.function.arguments };
                     }
+
+                    // ⚠️ 关键：反向映射参数名（Kiro → CC）
+                    const reversedInput = this.reverseMapToolInput(tc.function.name, inputObject);
+
                     contentArray.push({
                         type: "tool_use",
                         id: tc.id,
                         name: tc.function.name,
-                        input: inputObject
+                        input: reversedInput
                     });
-                    outputTokens += this.countTextTokens(tc.function.arguments);
+                    outputTokens += this.countTextTokens(JSON.stringify(reversedInput));
                 }
                 stopReason = "tool_use"; // Set stop_reason to "tool_use" when toolCalls exist
             } else if (content) {
