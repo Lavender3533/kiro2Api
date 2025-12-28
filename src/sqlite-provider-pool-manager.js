@@ -184,6 +184,16 @@ export class SQLiteProviderPoolManager {
             );
         }
 
+        // 400 错误是请求格式问题，不是账号问题，不应该计入错误计数
+        const isClientRequestError = errorMessage && (
+            errorMessage.includes('400') ||
+            errorMessage.includes('Bad Request')
+        );
+        if (isClientRequestError) {
+            this._log('info', `Client request error (400) for ${providerConfig.uuid}, not counting against provider health`);
+            return;
+        }
+
         // 检查致命错误
         if (errorMessage) {
             const msg = errorMessage.toLowerCase();

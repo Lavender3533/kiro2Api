@@ -198,6 +198,16 @@ export class ProviderPoolManager {
                 );
             }
 
+            // 400 错误是请求格式问题，不是账号问题，不应该计入错误计数
+            const isClientRequestError = errorMessage && (
+                errorMessage.includes('400') ||
+                errorMessage.includes('Bad Request')
+            );
+            if (isClientRequestError) {
+                this._log('info', `Client request error (400) for ${providerConfig.uuid}, not counting against provider health`);
+                return;
+            }
+
             // 检查是否是致命错误（立即标记为不健康）
             // 400 - refreshToken 失效，401 - Token 无效/过期，402 - 额度用尽，403 - 封禁
             if (errorMessage) {

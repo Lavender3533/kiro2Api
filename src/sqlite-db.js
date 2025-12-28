@@ -135,7 +135,8 @@ class SQLiteDB {
      * @param {Object} provider - 提供商配置
      */
     upsertProvider(provider) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             INSERT INTO providers (
                 uuid, provider_type, config, is_healthy, is_disabled,
                 error_count, usage_count, last_used, last_error_time,
@@ -190,7 +191,8 @@ class SQLiteDB {
      * @param {string} providerType - 提供商类型
      */
     upsertProviders(providers, providerType) {
-        const upsert = this.db.transaction((items) => {
+        const db = this.getDb();
+        const upsert = db.transaction((items) => {
             for (const provider of items) {
                 this.upsertProvider({
                     ...provider,
@@ -206,12 +208,13 @@ class SQLiteDB {
      * @param {string} providerType - 可选，过滤提供商类型
      */
     getProviders(providerType = null) {
+        const db = this.getDb();
         let stmt;
         if (providerType) {
-            stmt = this.db.prepare('SELECT * FROM providers WHERE provider_type = ?');
+            stmt = db.prepare('SELECT * FROM providers WHERE provider_type = ?');
             return stmt.all(providerType).map(this._parseProviderRow);
         } else {
-            stmt = this.db.prepare('SELECT * FROM providers');
+            stmt = db.prepare('SELECT * FROM providers');
             return stmt.all().map(this._parseProviderRow);
         }
     }
@@ -222,10 +225,11 @@ class SQLiteDB {
      * @param {string} model - 可选，过滤支持的模型
      */
     getHealthyProviders(providerType, model = null) {
+        const db = this.getDb();
         let providers;
         if (model) {
             // SQLite 没有 json_array_contains，使用 JavaScript 过滤
-            const allHealthy = this.db.prepare(`
+            const allHealthy = db.prepare(`
                 SELECT * FROM providers
                 WHERE provider_type = ?
                 AND is_healthy = 1
@@ -242,7 +246,7 @@ class SQLiteDB {
                 }
             });
         } else {
-            const stmt = this.db.prepare(`
+            const stmt = db.prepare(`
                 SELECT * FROM providers
                 WHERE provider_type = ?
                 AND is_healthy = 1
@@ -258,7 +262,8 @@ class SQLiteDB {
      * @param {string} uuid - 提供商 UUID
      */
     getProviderByUuid(uuid) {
-        const stmt = this.db.prepare('SELECT * FROM providers WHERE uuid = ?');
+        const db = this.getDb();
+        const stmt = db.prepare('SELECT * FROM providers WHERE uuid = ?');
         const row = stmt.get(uuid);
         return row ? this._parseProviderRow(row) : null;
     }
@@ -270,6 +275,7 @@ class SQLiteDB {
      * @param {Object} extra - 额外更新字段
      */
     updateProviderHealth(uuid, isHealthy, extra = {}) {
+        const db = this.getDb();
         const fields = ['is_healthy = ?', "updated_at = datetime('now')"];
         const values = [isHealthy ? 1 : 0];
 
@@ -303,7 +309,7 @@ class SQLiteDB {
         }
 
         values.push(uuid);
-        const stmt = this.db.prepare(`UPDATE providers SET ${fields.join(', ')} WHERE uuid = ?`);
+        const stmt = db.prepare(`UPDATE providers SET ${fields.join(', ')} WHERE uuid = ?`);
         return stmt.run(...values);
     }
 
@@ -312,7 +318,8 @@ class SQLiteDB {
      * @param {string} uuid - 提供商 UUID
      */
     incrementUsage(uuid) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             UPDATE providers
             SET usage_count = usage_count + 1,
                 last_used = datetime('now'),
@@ -327,7 +334,8 @@ class SQLiteDB {
      * @param {string} uuid - 提供商 UUID
      */
     deleteProvider(uuid) {
-        const stmt = this.db.prepare('DELETE FROM providers WHERE uuid = ?');
+        const db = this.getDb();
+        const stmt = db.prepare('DELETE FROM providers WHERE uuid = ?');
         return stmt.run(uuid);
     }
 
@@ -396,8 +404,9 @@ class SQLiteDB {
      * @param {number} ttlSeconds - 缓存有效期（秒），默认 5 分钟
      */
     setUsageCache(uuid, providerType, usageData, ttlSeconds = 300) {
+        const db = this.getDb();
         const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
-        const stmt = this.db.prepare(`
+        const stmt = db.prepare(`
             INSERT INTO usage_cache (provider_uuid, provider_type, usage_data, expires_at, cached_at)
             VALUES (?, ?, ?, ?, datetime('now'))
             ON CONFLICT(provider_uuid, provider_type) DO UPDATE SET
@@ -415,7 +424,8 @@ class SQLiteDB {
      * @returns {Object|null} 缓存的用量数据，如果过期或不存在则返回 null
      */
     getUsageCache(uuid, providerType) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             SELECT * FROM usage_cache
             WHERE provider_uuid = ?
             AND provider_type = ?
@@ -441,7 +451,8 @@ class SQLiteDB {
      * @returns {Map} UUID -> 用量数据的映射
      */
     getUsageCacheBatch(providerType) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             SELECT * FROM usage_cache
             WHERE provider_type = ?
             AND expires_at > datetime('now')
@@ -466,7 +477,8 @@ class SQLiteDB {
      * 清理过期的用量缓存
      */
     cleanExpiredUsageCache() {
-        const stmt = this.db.prepare(`DELETE FROM usage_cache WHERE expires_at <= datetime('now')`);
+        const db = this.getDb();
+        const stmt = db.prepare(`DELETE FROM usage_cache WHERE expires_at <= datetime('now')`);
         const result = stmt.run();
         if (result.changes > 0) {
             console.log(`[SQLiteDB] Cleaned ${result.changes} expired usage cache entries`);
@@ -478,7 +490,8 @@ class SQLiteDB {
      * 清空所有用量缓存
      */
     clearAllUsageCache() {
-        const stmt = this.db.prepare('DELETE FROM usage_cache');
+        const db = this.getDb();
+        const stmt = db.prepare('DELETE FROM usage_cache');
         return stmt.run();
     }
 
@@ -493,7 +506,8 @@ class SQLiteDB {
      * @param {string} errorMessage - 错误信息
      */
     recordHealthCheck(uuid, providerType, isHealthy, checkModel = null, errorMessage = null) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             INSERT INTO health_check_history (provider_uuid, provider_type, is_healthy, check_model, error_message)
             VALUES (?, ?, ?, ?, ?)
         `);
@@ -506,7 +520,8 @@ class SQLiteDB {
      * @param {number} limit - 返回记录数量
      */
     getHealthCheckHistory(uuid, limit = 10) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             SELECT * FROM health_check_history
             WHERE provider_uuid = ?
             ORDER BY check_time DESC
@@ -520,7 +535,8 @@ class SQLiteDB {
      * @param {number} days - 保留天数
      */
     cleanOldHealthHistory(days = 7) {
-        const stmt = this.db.prepare(`
+        const db = this.getDb();
+        const stmt = db.prepare(`
             DELETE FROM health_check_history
             WHERE check_time < datetime('now', '-' || ? || ' days')
         `);
@@ -538,10 +554,11 @@ class SQLiteDB {
      * @param {string} providerType - 可选，过滤提供商类型
      */
     getPoolStats(providerType = null) {
+        const db = this.getDb();
         let whereClause = providerType ? 'WHERE provider_type = ?' : '';
         let params = providerType ? [providerType] : [];
 
-        const stmt = this.db.prepare(`
+        const stmt = db.prepare(`
             SELECT
                 provider_type,
                 COUNT(*) as total,
