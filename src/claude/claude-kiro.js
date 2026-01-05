@@ -48,7 +48,160 @@ const KIRO_CONSTANTS = {
 
     // 官方 Kiro 输出限制（extension.js:766436）- 防止 tool_result 内容过长导致 400 错误
     MAX_TOOL_OUTPUT_LENGTH: 64000,   // 64K 字符，和官方 Kiro 一致
+
+    // ============================================================================
+    // 自适应超时配置（借鉴 KiroGate）
+    // ============================================================================
+    SLOW_MODELS: ['claude-opus-4-5', 'claude-3-opus', 'opus'],  // 慢模型列表
+    SLOW_MODEL_TIMEOUT_MULTIPLIER: 3.0,  // 慢模型超时倍数
+    FIRST_TOKEN_TIMEOUT: 120000,    // 首字超时 120 秒
+    FIRST_TOKEN_MAX_RETRIES: 3,     // 首字超时最大重试次数
+    STREAM_READ_TIMEOUT: 300000,    // 流读取超时 300 秒
+
+    // ============================================================================
+    // 长文档分段配置（借鉴 KiroGate）
+    // ============================================================================
+    AUTO_CHUNKING_ENABLED: true,     // 是否启用自动分段
+    AUTO_CHUNK_THRESHOLD: 150000,    // 触发分段的字符数阈值（150K）
+    CHUNK_MAX_CHARS: 100000,         // 每个分段最大字符数（100K）
+    CHUNK_OVERLAP_CHARS: 2000,       // 分段重叠字符数
 };
+
+// ============================================================================
+// 自适应超时函数（借鉴 KiroGate）
+// ============================================================================
+
+/**
+ * 根据模型类型获取自适应超时时间
+ * 对于 Opus 等慢模型，自动增加超时时间
+ */
+function getAdaptiveTimeout(model, baseTimeout) {
+    if (!model) return baseTimeout;
+
+    const modelLower = model.toLowerCase();
+    for (const slowModel of KIRO_CONSTANTS.SLOW_MODELS) {
+        if (modelLower.includes(slowModel.toLowerCase())) {
+            const adaptiveTimeout = baseTimeout * KIRO_CONSTANTS.SLOW_MODEL_TIMEOUT_MULTIPLIER;
+            console.log(`[Kiro] Slow model detected (${model}), timeout: ${baseTimeout}ms -> ${adaptiveTimeout}ms`);
+            return adaptiveTimeout;
+        }
+    }
+    return baseTimeout;
+}
+
+// ============================================================================
+// 长文档分段处理（借鉴 KiroGate）
+// ============================================================================
+
+/**
+ * 检查文本是否需要分段
+ */
+function needsChunking(text) {
+    return KIRO_CONSTANTS.AUTO_CHUNKING_ENABLED &&
+           text &&
+           text.length > KIRO_CONSTANTS.AUTO_CHUNK_THRESHOLD;
+}
+
+/**
+ * 在目标位置附近找到合适的分割点（优先在段落/句子边界）
+ */
+function findSplitPoint(text, targetPos) {
+    if (targetPos >= text.length) return text.length;
+
+    const searchStart = Math.max(0, targetPos - 500);
+    const searchEnd = Math.min(text.length, targetPos + 500);
+    const searchText = text.substring(searchStart, searchEnd);
+
+    // 优先级 1：段落边界（双换行）
+    const paragraphBreaks = [...searchText.matchAll(/\n\n+/g)];
+    if (paragraphBreaks.length > 0) {
+        const best = paragraphBreaks.reduce((a, b) =>
+            Math.abs((searchStart + a.index + a[0].length) - targetPos) <
+            Math.abs((searchStart + b.index + b[0].length) - targetPos) ? a : b
+        );
+        return searchStart + best.index + best[0].length;
+    }
+
+    // 优先级 2：句子边界
+    const sentenceBreaks = [...searchText.matchAll(/[.!?。！？]\s+/g)];
+    if (sentenceBreaks.length > 0) {
+        const best = sentenceBreaks.reduce((a, b) =>
+            Math.abs((searchStart + a.index + a[0].length) - targetPos) <
+            Math.abs((searchStart + b.index + b[0].length) - targetPos) ? a : b
+        );
+        return searchStart + best.index + best[0].length;
+    }
+
+    // 优先级 3：单换行
+    const lineBreaks = [...searchText.matchAll(/\n/g)];
+    if (lineBreaks.length > 0) {
+        const best = lineBreaks.reduce((a, b) =>
+            Math.abs((searchStart + a.index + 1) - targetPos) <
+            Math.abs((searchStart + b.index + 1) - targetPos) ? a : b
+        );
+        return searchStart + best.index + 1;
+    }
+
+    return targetPos;
+}
+
+/**
+ * 将长文本分割成多个片段
+ */
+function splitLongText(text) {
+    if (!needsChunking(text)) {
+        return [text];
+    }
+
+    const chunks = [];
+    let currentPos = 0;
+    const maxChars = KIRO_CONSTANTS.CHUNK_MAX_CHARS;
+    const overlap = KIRO_CONSTANTS.CHUNK_OVERLAP_CHARS;
+
+    while (currentPos < text.length) {
+        let chunkEnd = currentPos + maxChars;
+
+        if (chunkEnd >= text.length) {
+            chunks.push(text.substring(currentPos));
+            break;
+        }
+
+        // 找到合适的分割点
+        const splitPos = findSplitPoint(text, chunkEnd);
+        chunks.push(text.substring(currentPos, splitPos));
+
+        // 移动到下一个位置（考虑重叠）
+        currentPos = splitPos - overlap;
+        if (currentPos <= 0 || currentPos >= splitPos) {
+            currentPos = splitPos;
+        }
+    }
+
+    console.log(`[Kiro] Split long document into ${chunks.length} chunks (total: ${text.length} chars)`);
+    return chunks;
+}
+
+/**
+ * 为分段创建带上下文的提示词
+ */
+function createChunkPrompt(chunk, chunkIndex, totalChunks, originalPrompt) {
+    if (totalChunks === 1) {
+        return `${originalPrompt}\n\n${chunk}`;
+    }
+
+    const contextInfo = `[文档片段 ${chunkIndex + 1}/${totalChunks}]`;
+    let instruction;
+
+    if (chunkIndex === 0) {
+        instruction = '这是一个长文档的第一部分。请处理这部分内容，后续会提供剩余部分。';
+    } else if (chunkIndex === totalChunks - 1) {
+        instruction = '这是文档的最后一部分。请结合之前的内容完成处理。';
+    } else {
+        instruction = `这是文档的第 ${chunkIndex + 1} 部分。请继续处理。`;
+    }
+
+    return `${contextInfo}\n${instruction}\n\n${originalPrompt}\n\n---\n${chunk}\n---`;
+}
 
 // Thinking 功能的提示词模板（通过 prompt injection 实现，参考 cifang）
 // 优化版本：在简洁和效果之间平衡（~80 tokens）
@@ -776,18 +929,57 @@ function parseBracketToolCalls(responseText) {
 }
 
 function deduplicateToolCalls(toolCalls) {
+    if (!toolCalls || toolCalls.length === 0) {
+        return [];
+    }
+
+    // 第一步：按 id 去重，保留参数更完整的（借鉴 KiroGate）
+    const byId = new Map();
+
+    for (const tc of toolCalls) {
+        const tcId = tc.id || tc.toolUseId;
+        if (!tcId) {
+            // 没有 id 的直接加入
+            byId.set(`no-id-${byId.size}`, tc);
+            continue;
+        }
+
+        const existing = byId.get(tcId);
+        if (!existing) {
+            byId.set(tcId, tc);
+        } else {
+            // 有重复 id，保留参数更完整的
+            const existingArgs = existing.function?.arguments || existing.input || '{}';
+            const currentArgs = tc.function?.arguments || tc.input || '{}';
+
+            if (currentArgs !== '{}' && (existingArgs === '{}' || currentArgs.length > existingArgs.length)) {
+                console.log(`[Kiro] Replacing tool call ${tcId} with better arguments: ${existingArgs.length} -> ${currentArgs.length} chars`);
+                byId.set(tcId, tc);
+            }
+        }
+    }
+
+    // 第二步：按 name+arguments 去重
     const seen = new Set();
     const uniqueToolCalls = [];
 
-    for (const tc of toolCalls) {
-        const key = `${tc.function.name}-${tc.function.arguments}`;
+    for (const tc of byId.values()) {
+        const name = tc.function?.name || tc.name || '';
+        const args = tc.function?.arguments || tc.input || '{}';
+        const key = `${name}-${args}`;
+
         if (!seen.has(key)) {
             seen.add(key);
             uniqueToolCalls.push(tc);
         } else {
-            console.log(`Skipping duplicate tool call: ${tc.function.name}`);
+            console.log(`[Kiro] Skipping duplicate tool call: ${name}`);
         }
     }
+
+    if (toolCalls.length !== uniqueToolCalls.length) {
+        console.log(`[Kiro] Deduplicated tool calls: ${toolCalls.length} -> ${uniqueToolCalls.length}`);
+    }
+
     return uniqueToolCalls;
 }
 
@@ -3778,7 +3970,14 @@ ${conversationData}`;
 
             // 当 model 以 kiro-amazonq 开头时，使用 amazonQUrl，否则使用 baseUrl
             const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
-            const response = await this.axiosInstance.post(requestUrl, requestData, { headers });
+
+            // 自适应超时：根据模型类型调整（慢模型 x3）
+            const adaptiveTimeout = getAdaptiveTimeout(model, KIRO_CONSTANTS.AXIOS_TIMEOUT);
+
+            const response = await this.axiosInstance.post(requestUrl, requestData, {
+                headers,
+                timeout: adaptiveTimeout  // 使用自适应超时
+            });
 
             // ========================================
             // 📥 响应日志
@@ -4438,6 +4637,9 @@ ${conversationData}`;
 
         const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
 
+        // 自适应超时：根据模型类型调整（慢模型 x3）
+        const adaptiveTimeout = getAdaptiveTimeout(model, KIRO_CONSTANTS.AXIOS_TIMEOUT);
+
         let stream = null;
         let eventCount = 0;  // 统计流式事件数量
         let totalBytesReceived = 0;  // 统计接收的字节数
@@ -4447,6 +4649,7 @@ ${conversationData}`;
             const response = await this.axiosInstance.post(requestUrl, requestData, {
                 headers,
                 responseType: 'stream',
+                timeout: adaptiveTimeout,  // 使用自适应超时
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity
             });
